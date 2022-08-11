@@ -73,7 +73,7 @@ class Simple(mi.SamplingIntegrator):
 
 mi.register_integrator("integrator", lambda props: Simple(props))
 
-scene = mi.load_file("./scenes/cbox.xml", spp=64,
+scene = mi.load_file("./scenes/scenes/cbox.xml", spp=64,
                      res=1024, integrator="integrator", max_depth=10)
 
 img = mi.render(scene)
