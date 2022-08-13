@@ -1,3 +1,5 @@
+
+
 import mitsuba as mi
 import drjit as dr
 import matplotlib.pyplot as plt
@@ -14,7 +16,7 @@ class Simple(mi.SamplingIntegrator):
     def __init__(self, props=mi.Properties()):
         super().__init__(props)
         self.max_depth = props.get("max_depth")
-        self.rr_depth = 2
+        self.rr_depth = props.get("rr_depth")
 
     def sample(self, scene: mi.Scene, sampler: mi.Sampler, ray_: mi.RayDifferential3f, medium: mi.Medium = None, active: bool = True):
         bsdf_ctx = mi.BSDFContext()
@@ -73,8 +75,14 @@ class Simple(mi.SamplingIntegrator):
 
 mi.register_integrator("integrator", lambda props: Simple(props))
 
-scene = mi.load_file("./scenes/scenes/cbox.xml", spp=64,
-                     res=1024, integrator="integrator", max_depth=10)
+scene = mi.cornell_box()
+scene['integrator']['type'] = 'integrator'
+scene['integrator']['max_depth'] = 16
+scene['integrator']['rr_depth'] = 2
+scene['sensor']['sampler']['sample_count'] = 64
+scene['sensor']['film']['width'] = 1024
+scene['sensor']['film']['height'] = 1024
+scene = mi.load_dict(scene)
 
 img = mi.render(scene)
 
