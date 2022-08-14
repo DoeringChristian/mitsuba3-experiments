@@ -1,15 +1,9 @@
 
-
 import mitsuba as mi
 import drjit as dr
 import matplotlib.pyplot as plt
 
 mi.set_variant("cuda_ad_rgb")
-
-
-def mis_weight(pdf_a, pdf_b):
-    a2 = dr.sqr(pdf_a)
-    return dr.detach(dr.select(pdf_a > 0, a2 / dr.fma(pdf_b, pdf_b, a2), 0), True)
 
 
 class Simple(mi.SamplingIntegrator):
@@ -18,13 +12,99 @@ class Simple(mi.SamplingIntegrator):
         self.max_depth = props.get("max_depth")
         self.rr_depth = props.get("rr_depth")
 
-    def sample(self, scene: mi.Scene, sampler: mi.Sampler, ray_: mi.RayDifferential3f, medium: mi.Medium = None, active: bool = True):
+    def render(self: mi.Integrator, scene: mi.Scene, sensor: mi.Sensor, seed: int = 0, spp: int = 0, develop: bool = True, evaluate: bool = True) -> dr.scalar.TensorXf:
+        film = sensor.film()
+        sampler = sensor.sampler()
+
+        spp = sampler.sample_count()
+
+        film_size = film.crop_size()
+        n_chanels = film.prepare(self.aov_names())
+
+        wavefront_size = film_size.x * film_size.y
+
+        # sampler.set_samples_per_wavefront()
+        sampler.seed(0, wavefront_size)
+
+        block: mi.ImageBlock = film.create_block()
+        block.set_offset(film.crop_offset())
+
+        idx = dr.arange(mi.UInt32, wavefront_size)
+
+        pos = mi.Vector2f()
+        pos.y = idx // film_size[0]
+        pos.x = idx % film_size[0]
+
+        pos += film.crop_offset()
+
+        aovs = [mi.Float(0)] * n_chanels
+
+        print(spp)
+
+        for i in range(spp):
+            self.render_sample(scene, sensor, sampler, block, aovs, pos)
+            # Trigger kernel launch
+            sampler.advance()
+            sampler.schedule_state()
+            dr.eval(block.tensor())
+
+        # DEBUG:
+        """
+        pos = mi.Vector2f(0, 0)
+        aovs[0] = 1.
+        aovs[1] = 1.
+        aovs[2] = 1.
+        aovs[3] = 1.
+        block.put(pos, aovs)
+        """
+
+        film.put_block(block)
+
+        result = film.develop()
+        dr.schedule(result)
+        dr.eval()
+        return result
+
+    def render_sample(self, scene: mi.Scene, sensor: mi.Sensor, sampler: mi.Sampler, block: mi.ImageBlock, aovs, pos: mi.Vector2f, active=True):
+        film = sensor.film()
+        scale = 1. / mi.Vector2f(film.crop_size())
+        offset = - mi.Vector2f(film.crop_offset())
+        sample_pos = pos + offset + sampler.next_2d()
+        time = 1.
+        s1, s3 = sampler.next_1d(), sampler.next_2d()
+        ray, ray_weight = sensor.sample_ray(time, s1, sample_pos * scale, s3)
+        medium = sensor.medium()
+
+        active = mi.Bool(True)
+        (spec, mask, aov) = self.sample(scene, sampler, ray, medium, active)
+
+        spec = ray_weight * spec
+
+        rgb = mi.Color3f()
+
+        if mi.is_spectral:
+            rgb = mi.spectrum_list_to_srgb(spec, ray.wavelengths, active)
+        elif mi.is_monochromatic:
+            rgb = spec.x
+        else:
+            rgb = spec
+
+        # Debug:
+        aovs[0] = rgb.x
+        aovs[1] = rgb.y
+        aovs[2] = rgb.z
+        aovs[3] = 1.
+
+        block.put(sample_pos, aovs)
+
+    def sample(self, scene: mi.Scene, sampler: mi.Sampler, ray_: mi.RayDifferential3f, medium: mi.Medium = None, active: mi.Bool = True):
         bsdf_ctx = mi.BSDFContext()
 
         ray = mi.Ray3f(ray_)
         depth = mi.UInt32(0)
         f = mi.Spectrum(1.)
         L = mi.Spectrum(0.)
+        active = mi.Bool(active)
 
         prev_si = dr.zeros(mi.SurfaceInteraction3f)
 
