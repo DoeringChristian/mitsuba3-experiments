@@ -13,34 +13,25 @@ class PVert:
     f: mi.Spectrum
     L: mi.Spectrum
     p: mi.Point3d
+    DRJIT_STRUCT = {'f': mi.Spectrum, 'L': mi.Spectrum, 'p': mi.Point3d}
 
 
 class Path:
     idx: mi.UInt32
-    f: mi.Spectrum
-    L: mi.Spectrum
-    p: mi.Point3d
+    vertices: PVert
 
     def __init__(self, n_rays: int, max_depth: int):
         self.n_rays = n_rays
         self.max_depth = max_depth
         self.idx = dr.arange(mi.UInt32, n_rays)
 
-        self.f = dr.ones(mi.Spectrum, shape=(self.max_depth * self.n_rays))
-        self.L = dr.zeros(mi.Spectrum, shape=(self.max_depth * self.n_rays))
-        self.p = dr.zeros(mi.Spectrum, shape=(self.max_depth * self.n_rays))
+        self.vertices = dr.zeros(PVert, shape=(self.max_depth * self.n_rays))
 
     def __setitem__(self, depth: mi.UInt32, value: PVert):
-        dr.scatter(self.f, value.f, depth * self.n_rays + self.idx)
-        dr.scatter(self.L, value.L, depth * self.n_rays + self.idx)
-        dr.scatter(self.p, value.p, depth * self.n_rays + self.idx)
+        dr.scatter(self.vertices, value, depth * self.n_rays + self.idx)
 
     def __getitem__(self, depth: mi.UInt32) -> PVert:
-        return PVert(
-            f=dr.gather(mi.Spectrum, self.f, depth * self.n_rays + self.idx),
-            L=dr.gather(mi.Spectrum, self.L, depth * self.n_rays + self.idx),
-            p=dr.gather(mi.Point3f, self.p, depth * self.n_rays + self.idx)
-        )
+        return dr.gather(PVert, self.vertices, depth * self.n_rays + self.idx)
 
 
 class Simple(mi.SamplingIntegrator):
