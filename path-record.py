@@ -5,15 +5,23 @@ import drjit as dr
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
-
 mi.set_variant("cuda_ad_rgb")
 
 
+def drjitstruct(cls):
+    annotations = cls.__dict__.get('__annotations__', {})
+    drjit_struct = {}
+    for name, type in annotations.items():
+        drjit_struct[name] = type
+    cls.DRJIT_STRUCT = drjit_struct
+    return cls
+
+
+@drjitstruct
 class PVert:
     f: mi.Spectrum
     L: mi.Spectrum
-    p: mi.Point3d
-    DRJIT_STRUCT = {'f': mi.Spectrum, 'L': mi.Spectrum, 'p': mi.Point3f}
+    p: mi.Point3f
 
     def __init__(self, f=mi.Spectrum(), L=mi.Spectrum(), p=mi.Point3f()):
         self.f = f
