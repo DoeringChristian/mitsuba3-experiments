@@ -3,6 +3,7 @@
 import mitsuba as mi
 import drjit as dr
 import matplotlib.pyplot as plt
+from typing import overload
 
 mi.set_variant("cuda_ad_rgb")
 # dr.set_log_level(dr.LogLevel.Debug)
@@ -21,12 +22,15 @@ def drjitstruct(cls):
 class PVert:
     f: mi.Spectrum
     L: mi.Spectrum
-    p: mi.Point3f
+    i: mi.Interaction3f
+    #bsdf: mi.BSDF
+    #si: mi.SurfaceInteraction3f
 
-    def __init__(self, f=mi.Spectrum(), L=mi.Spectrum(), p=mi.Point3f()):
+    def __init__(self, f=mi.Spectrum(), L=mi.Spectrum(), i=mi.Interaction3f()):
         self.f = f
         self.L = L
-        self.p = p
+        self.i = i
+        #self.bsdf = bsdf
 
 
 class Path:
@@ -43,8 +47,21 @@ class Path:
     def __setitem__(self, depth: mi.UInt32, value: PVert):
         dr.scatter(self.vertices, value, depth * self.n_rays + self.idx)
 
+    # Return vertex at depth
+    @overload
     def __getitem__(self, depth: mi.UInt32) -> PVert:
-        return dr.gather(PVert, self.vertices, depth * self.n_rays + self.idx)
+        ...
+
+    # Return a vertex at (depth, ray_index)
+    @overload
+    def __getitem__(self, idx: (mi.UInt32, mi.UInt32)) -> PVert:
+        ...
+
+    def __getitem__(self, idx):
+        if isinstance(idx, mi.UInt32):
+            return dr.gather(PVert, self.vertices, idx * self.n_rays + self.idx)
+        if isinstance(idx, tuple) and isinstance(idx[0], mi.UInt32) and isinstance(idx[1], mi.UInt32):
+            return dr.gather(PVert, self.vertices, idx[0] * self.n_rays + idx[1])
 
 
 class Simple(mi.SamplingIntegrator):
@@ -88,7 +105,7 @@ class Simple(mi.SamplingIntegrator):
 
             ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
 
-            path[depth] = PVert(f, L, si.p)
+            path[depth] = PVert(f, L, mi.Interaction3f(si))
 
             prev_si = dr.detach(si, True)
 
@@ -104,11 +121,12 @@ class Simple(mi.SamplingIntegrator):
         lray, lweight, emitter = scene.sample_emitter_ray(
             1., sampler.next_1d(), sampler.next_2d(), sampler.next_2d(), active)
 
-        #lpath = self.record(scene, sampler, lray, True)
+        lpath = self.record(scene, sampler, lray, True)
 
         vpath = self.record(scene, sampler, ray, True)
 
         dr.eval(vpath.vertices)
+        dr.eval(lpath.vertices)
 
         depth = mi.UInt32(0)
         active = mi.Bool(active)
@@ -119,9 +137,13 @@ class Simple(mi.SamplingIntegrator):
         loop.set_max_iterations(self.max_depth)
 
         while loop(active):
-            vert = vpath[depth]
-            L += vert.L * f
-            f *= vert.f
+            vvert = vpath[depth]
+            L += vvert.L * f
+            f *= vvert.f
+
+            ldepth = mi.UInt32(sampler.next_1d() * self.max_depth)
+            light = mi.UInt32(sampler.next_1d() * lpath.n_rays)
+            lvert = lpath[(ldepth, light)]
 
             active = depth + 1 < self.max_depth
             depth += 1
@@ -133,9 +155,10 @@ mi.register_integrator("integrator", lambda props: Simple(props))
 
 scene = mi.cornell_box()
 scene['integrator']['type'] = 'integrator'
-scene['integrator']['max_depth'] = 16
+scene['integrator']['max_depth'] = 8
 scene['integrator']['rr_depth'] = 2
-scene['sensor']['sampler']['sample_count'] = 1
+scene['integrator']['samples_per_pass'] = 4
+scene['sensor']['sampler']['sample_count'] = 4
 scene['sensor']['film']['width'] = 1024
 scene['sensor']['film']['height'] = 1024
 scene = mi.load_dict(scene)
