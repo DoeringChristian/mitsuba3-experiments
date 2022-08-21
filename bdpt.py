@@ -1,3 +1,5 @@
+
+
 import mitsuba as mi
 import drjit as dr
 import matplotlib.pyplot as plt
@@ -106,6 +108,8 @@ class Simple(mi.SamplingIntegrator):
 
         vpath = self.record(scene, sampler, ray, True)
 
+        dr.eval(vpath.vertices)
+
         depth = mi.UInt32(0)
         active = mi.Bool(active)
         L = mi.Spectrum(0.)
@@ -118,9 +122,10 @@ class Simple(mi.SamplingIntegrator):
             vert = vpath[depth]
             L += vert.L * f
             f *= vert.f
+
+            active = depth + 1 < self.max_depth
             depth += 1
 
-        #vert = vpath[mi.UInt32(0)]
         return (L, mi.Bool(True), [])
 
 
