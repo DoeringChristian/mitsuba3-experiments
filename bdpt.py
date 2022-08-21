@@ -18,19 +18,19 @@ def drjitstruct(cls):
     return cls
 
 
+# Need to record parameters to reconstruct surface intaraction
 @drjitstruct
 class PVert:
     f: mi.Spectrum
     L: mi.Spectrum
     i: mi.Interaction3f
-    #bsdf: mi.BSDF
-    #si: mi.SurfaceInteraction3f
+    ps: mi.PositionSample3f
 
-    def __init__(self, f=mi.Spectrum(), L=mi.Spectrum(), i=mi.Interaction3f()):
+    def __init__(self, f=mi.Spectrum(), L=mi.Spectrum(), i=mi.Interaction3f(), ps=mi.PositionSample3f):
         self.f = f
         self.L = L
         self.i = i
-        #self.bsdf = bsdf
+        self.ps = ps
 
 
 class Path:
@@ -105,7 +105,8 @@ class Simple(mi.SamplingIntegrator):
 
             ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
 
-            path[depth] = PVert(f, L, mi.Interaction3f(si))
+            path[depth] = PVert(f, L, mi.Interaction3f(si),
+                                mi.PositionSample3f(si))
 
             prev_si = dr.detach(si, True)
 
@@ -117,7 +118,6 @@ class Simple(mi.SamplingIntegrator):
         return path
 
     def sample(self, scene: mi.Scene, sampler: mi.Sampler, ray: mi.RayDifferential3f, medium: mi.Medium = None, active: mi.Bool = True):
-
         lray, lweight, emitter = scene.sample_emitter_ray(
             1., sampler.next_1d(), sampler.next_2d(), sampler.next_2d(), active)
 
