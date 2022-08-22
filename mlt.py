@@ -10,10 +10,10 @@ from pathrecord import Path, drjitstruct  # noqa
 
 @drjitstruct
 class PathVert:
-    wo: mi.Vector2f
+    wo: mi.Vector3f
     f: mi.Spectrum
 
-    def __init__(self, wo=mi.Vector2f(), f=mi.Spectrum()):
+    def __init__(self, wo=mi.Vector3f(), f=mi.Spectrum()):
         self.wo = wo
         self.f = f
 
@@ -138,7 +138,8 @@ class Simple(mi.SamplingIntegrator):
             """
 
             vert_prev: PathVert = path_prev[depth]
-            wo_new = dr.erfinv(sampler.next_2d())-vert_prev.wo
+            wo_new = dr.erfinv(mi.warp.square_to_uniform_sphere(
+                sampler.next_2d()))-vert_prev.wo
 
             si: mi.SurfaceInteraction3f = scene.ray_intersect(
                 ray, ray_flags=mi.RayFlags.All, coherent=dr.eq(depth, 0))
@@ -158,6 +159,7 @@ class Simple(mi.SamplingIntegrator):
                 bsdf_ctx, si, sampler.next_1d(), sampler.next_2d(), active_next)
 
             # Update loop variables
+            path_prev[depth] = PathVert(bsdf_smaple.wo, bsdf_val)
 
             ray = si.spawn_ray(si.to_world(bsdf_smaple.wo))
             L = (L + Le)
