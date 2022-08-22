@@ -9,7 +9,7 @@ from pathrecord import Path, drjitstruct  # noqa
 
 
 @drjitstruct
-class PathVert:
+class PVert:
     wo: mi.Vector3f
     f: mi.Spectrum
 
@@ -56,18 +56,17 @@ class Simple(mi.SamplingIntegrator):
         pos += film.crop_offset()
 
         aovs = [mi.Float(0)] * n_chanels
-        path_prev = Path(wavefront_size, self.max_depth, dtype=PathVert)
+        path = Path(wavefront_size, self.max_depth, dtype=PVert)
 
         print(spp)
 
         for i in range(spp):
-            #X_new = dr.erfinv(sampler.next_2d())-X
             self.render_sample(scene, sensor, sampler,
-                               block, aovs, pos, path_prev, idx)
+                               block, aovs, pos, path, idx)
             # Trigger kernel launch
             sampler.advance()
             sampler.schedule_state()
-            dr.eval(path_prev.vertices)
+            dr.eval(path.vertices)
             dr.eval(block.tensor())
 
         film.put_block(block)
@@ -77,7 +76,7 @@ class Simple(mi.SamplingIntegrator):
         dr.eval()
         return result
 
-    def render_sample(self, scene: mi.Scene, sensor: mi.Sensor, sampler: mi.Sampler, block: mi.ImageBlock, aovs, pos: mi.Vector2f, path_prev: Path, idx: mi.UInt32, active=True):
+    def render_sample(self, scene: mi.Scene, sensor: mi.Sensor, sampler: mi.Sampler, block: mi.ImageBlock, aovs, pos: mi.Vector2f, path: Path, idx: mi.UInt32, active=True):
         film = sensor.film()
         scale = 1. / mi.Vector2f(film.crop_size())
         offset = - mi.Vector2f(film.crop_offset())
@@ -89,7 +88,7 @@ class Simple(mi.SamplingIntegrator):
 
         active = mi.Bool(True)
         (spec, mask, aov) = self.sample(
-            scene, sampler, ray, path_prev, idx, medium, active)
+            scene, sampler, ray, path, idx, medium, active)
 
         spec = ray_weight * spec
 
@@ -110,7 +109,7 @@ class Simple(mi.SamplingIntegrator):
 
         block.put(sample_pos, aovs)
 
-    def sample(self, scene: mi.Scene, sampler: mi.Sampler, ray_: mi.RayDifferential3f, path_prev: Path, idx: mi.UInt32, medium: mi.Medium = None, active: mi.Bool = True):
+    def sample(self, scene: mi.Scene, sampler: mi.Sampler, ray_: mi.RayDifferential3f, path: Path, idx: mi.UInt32, medium: mi.Medium = None, active: mi.Bool = True):
         bsdf_ctx = mi.BSDFContext()
 
         ray = mi.Ray3f(ray_)
@@ -127,19 +126,10 @@ class Simple(mi.SamplingIntegrator):
         loop.set_max_iterations(self.max_depth)
 
         while loop(active):
-            """
-            Xg = mi.Vector2f(
-                dr.gather(mi.Float, X, index=(idx * self.spp * 2 + depth * 2)),
-                dr.gather(mi.Float, X, index=(
-                    idx * self.spp * 2 + depth * 2 + 1))
-            )
-            X_new = dr.erfinv(sampler.next_2d())-Xg
 
-            """
-
-            vert_prev: PathVert = path_prev[depth]
+            pvert: PVert = path[depth]
             wo_new = dr.erfinv(mi.warp.square_to_uniform_sphere(
-                sampler.next_2d()))-vert_prev.wo
+                sampler.next_2d()))-pvert.wo
 
             si: mi.SurfaceInteraction3f = scene.ray_intersect(
                 ray, ray_flags=mi.RayFlags.All, coherent=dr.eq(depth, 0))
@@ -159,7 +149,7 @@ class Simple(mi.SamplingIntegrator):
                 bsdf_ctx, si, sampler.next_1d(), sampler.next_2d(), active_next)
 
             # Update loop variables
-            path_prev[depth] = PathVert(bsdf_smaple.wo, bsdf_val)
+            path[depth] = PVert(bsdf_smaple.wo, bsdf_val)
 
             ray = si.spawn_ray(si.to_world(bsdf_smaple.wo))
             L = (L + Le)
