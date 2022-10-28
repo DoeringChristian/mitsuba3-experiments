@@ -33,16 +33,16 @@ print(f"{scene=}")
 scene = mi.load_dict(scene)
 
 img = None
-mlt_depth = 100
-j = 2
+mlt_depth = 50
+j = 1
 with dr.suspend_grad():
-    for i in range(200):
+    for i in range(100):
         print(f"{i=}")
         nimg = mi.render(scene, integrator=integrator, seed=i, spp=4)
         if i < mlt_depth:
             img = nimg
         else:
-            img = img * mi.Float((j - 1) / j) + img / mi.Float(j)
+            img = img * mi.Float((j - 1) / j) + nimg / mi.Float(j)
             j += 1
         mi.util.write_bitmap(f"out/{i}.png", img, write_async=False)
 
