@@ -2,3 +2,4 @@ scenes.zip
 scenes/
 .venv
 out/
+__pycache__
