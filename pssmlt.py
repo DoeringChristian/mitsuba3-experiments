@@ -90,10 +90,10 @@ class Pssmlt(mi.SamplingIntegrator):
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
 
-        self.L = dr.select(u <= a, L / a, self.L / (1 - a))
+        self.L = dr.select(u < a, L, self.L)
         u = dr.tile(u, self.max_depth)
         a = dr.tile(a, self.max_depth)
-        self.path.vertices = dr.select(u <= a, path.vertices, self.path.vertices)
+        self.path.vertices = dr.select(u < a, path.vertices, self.path.vertices)
         dr.schedule(self.L)
         dr.schedule(self.path.vertices)
         dr.eval()
@@ -259,15 +259,17 @@ print(f"{scene=}")
 scene = mi.load_dict(scene)
 
 img = None
-mlt_depth = 50
+mlt_depth = 100
+j = 2
 with dr.suspend_grad():
-    for i in range(100):
+    for i in range(200):
         print(f"{i=}")
         nimg = mi.render(scene, integrator=integrator, seed=i, spp=1)
         if i < mlt_depth:
             img = nimg
         else:
-            img = img * mi.Float((i - 1) / i) + img / mi.Float(i)
+            img = img * mi.Float((j - 1) / j) + img / mi.Float(j)
+            j += 1
         mi.util.write_bitmap(f"out/{i}.png", img, write_async=False)
 
 plt.imshow(mi.util.convert_to_bitmap(img))
