@@ -4,7 +4,7 @@ import drjit as dr
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
-mi.set_variant("llvm_ad_rgb")
+mi.set_variant("cuda_ad_rgb")
 
 
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
@@ -94,6 +94,9 @@ class Pssmlt(mi.SamplingIntegrator):
         u = dr.tile(u, self.max_depth)
         a = dr.tile(a, self.max_depth)
         self.path.vertices = dr.select(u <= a, path.vertices, self.path.vertices)
+        dr.schedule(self.L)
+        dr.schedule(self.path.vertices)
+        dr.eval()
 
         self.sample_count += 1
         return self.L, valid, []
@@ -239,8 +242,8 @@ integrator = mi.load_dict(
         "rr_depth": 2,
     }
 )
-# scene["sensor"]["film"]["width"] = 128
-# scene["sensor"]["film"]["height"] = 128
+scene["sensor"]["film"]["width"] = 1024
+scene["sensor"]["film"]["height"] = 1024
 scene["sphere"] = {
     "type": "sphere",
     "to_world": mi.ScalarTransform4f.translate([0.335, -0.7, 0.38]).scale(0.3),
@@ -255,10 +258,16 @@ print(f"{scene=}")
 scene = mi.load_dict(scene)
 
 img = None
-for i in range(50):
-    print(f"{i=}")
-    img = mi.render(scene, integrator=integrator, seed=i)
-    mi.util.write_bitmap(f"out/{i}.png", img)
+mlt_depth = 8
+with dr.suspend_grad():
+    for i in range(50):
+        print(f"{i=}")
+        nimg = mi.render(scene, integrator=integrator, seed=i, spp=1)
+        if i < mlt_depth:
+            img = nimg
+        else:
+            img = img * mi.Float((i - 1) / i) + img / mi.Float(i)
+        mi.util.write_bitmap(f"out/{i}.png", img, write_async=False)
 
 plt.imshow(mi.util.convert_to_bitmap(img))
 plt.show()
