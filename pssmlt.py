@@ -4,8 +4,6 @@ import drjit as dr
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
-mi.set_variant("cuda_ad_rgb")
-
 
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
     """
@@ -68,11 +66,16 @@ class Pssmlt(mi.SamplingIntegrator):
     path: Path
     L: mi.Color3f
     sample_count = 0
+    nee = True
 
     def __init__(self, props: mi.Properties) -> None:
         self.max_depth = props.get("max_depth", def_value=16)
         self.rr_depth = props.get("rr_depth", def_value=4)
+        self.nee = props.get("nee", def_value=True)
         super().__init__(props)
+
+    def reset(self):
+        self.sample_count = 0
 
     def sample(
         self: mi.SamplingIntegrator,
@@ -109,168 +112,4 @@ class Pssmlt(mi.SamplingIntegrator):
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:
-        path = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
-
-        # --------------------- Configure loop state ----------------------
-        ray = mi.Ray3f(ray)
-        f = mi.Spectrum(1.0)
-        L = mi.Spectrum(0.0)
-        eta = mi.Float(1.0)
-        depth = mi.UInt32(0)
-        bsdf_ctx = mi.BSDFContext()
-
-        # Variables caching information from the previous bounce
-        prev_si = dr.zeros(mi.SurfaceInteraction3f)
-        prev_bsdf_pdf = mi.Float(1.0)
-        prev_bsdf_delta = mi.Bool(True)
-        active = mi.Bool(active)
-
-        loop = mi.Loop(
-            "Path Tracer",
-            state=lambda: (
-                sampler,
-                ray,
-                f,
-                L,
-                eta,
-                depth,
-                prev_si,
-                prev_bsdf_pdf,
-                prev_bsdf_delta,
-                active,
-            ),
-        )
-
-        loop.set_max_iterations(self.max_depth)
-
-        while loop(active):
-            with dr.resume_grad():
-                si: mi.SurfaceInteraction3f = scene.ray_intersect(
-                    ray, mi.RayFlags.All, coherent=mi.Bool(False)
-                )
-
-            # ---------------------- Direct emission ----------------------
-            ds = mi.DirectionSample3f(scene, si, prev_si)
-            em_pdf = scene.eval_emitter_direction(prev_si, ds, ~prev_bsdf_delta)
-
-            mis_bsdf = mis_weight(prev_bsdf_pdf, em_pdf)
-            # mis_bsdf = 1.0
-
-            # L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.) * mis_bsdf, L)
-            with dr.resume_grad():
-                # Le = f * mis_bsdf * ds.emitter.eval(si)
-                L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.0) * mis_bsdf, L)
-
-            active_next = (depth + 1 < self.max_depth) & si.is_valid()
-
-            # ---------------------- Emitter sampling ----------------------
-
-            bsdf: mi.BSDF = si.bsdf(ray)
-            active_em = active_next & mi.has_flag(bsdf.flags(), mi.BSDFFlags.All)
-
-            ds, em_weight = scene.sample_emitter_direction(
-                si, sampler.next_2d(), True, active_em
-            )
-            active_em &= dr.neq(ds.pdf, 0.0)
-
-            with dr.resume_grad():
-                ds.d = dr.normalize(ds.p - si.p)
-                em_val = scene.eval_emitter_direction(si, ds, active_em)
-                em_weight = dr.select(dr.neq(ds.pdf, 0), em_val / ds.pdf, 0)
-                dr.disable_grad(ds.d)
-
-            wo = si.to_local(ds.d)
-            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active_em)
-            bsdf_val = si.to_world_mueller(bsdf_val, -wo, si.wi)
-
-            mis_em = dr.select(ds.delta, 1.0, mis_weight(ds.pdf, bsdf_pdf))
-
-            L[active_em] = dr.fma(f, bsdf_val * em_weight * mis_em, L)
-
-            # ---------------------- BSDF sampling ----------------------
-            s1 = sampler.next_1d()
-            s2 = sampler.next_2d()
-
-            bsdf_sample, bsdf_weight = bsdf.sample(bsdf_ctx, si, s1, s2, active_next)
-            bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
-
-            # Pssmlt adjusting
-            wo = bsdf_sample.wo
-            wo += self.path[depth]
-            wo = dr.normalize(wo)
-            path[depth] = wo
-
-            ray = si.spawn_ray(si.to_world(wo))
-
-            if dr.grad_enabled(ray):
-                ray = dr.detach(ray)
-
-                wo = si.to_local(ray.d)
-                bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
-                bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / dr.detach(bsdf_pdf)
-
-            # ------ Update loop variables based on current interaction ------
-
-            f *= bsdf_weight
-            eta *= bsdf_sample.eta
-
-            prev_si = dr.detach(si)
-            prev_bsdf_pdf = bsdf_sample.pdf
-            prev_bsdf_delta = mi.has_flag(bsdf_sample.sampled_type, mi.BSDFFlags.Delta)
-
-            # -------------------- Stopping criterion ---------------------
-
-            depth[si.is_valid()] += 1
-
-            fmax = dr.max(f)
-
-            rr_prob = dr.minimum(fmax * dr.sqr(eta), 0.95)
-            rr_active = depth >= self.rr_depth
-            rr_continue = sampler.next_1d() < rr_prob
-
-            active = active_next & (~rr_active | rr_continue) & dr.neq(fmax, 0.0)
-
-        return L, path, dr.neq(depth, 0)
-
-
-mi.register_integrator("pssmlt", lambda props: Pssmlt(props))
-
-scene = mi.cornell_box()
-integrator = mi.load_dict(
-    {
-        "type": "pssmlt",
-        "max_depth": 8,
-        "rr_depth": 2,
-    }
-)
-scene["sensor"]["film"]["width"] = 1024
-scene["sensor"]["film"]["height"] = 1024
-scene["sphere"] = {
-    "type": "sphere",
-    "to_world": mi.ScalarTransform4f.translate([0.335, -0.7, 0.38]).scale(0.3),
-    "bsdf": {"type": "dielectric"},
-}
-scene["blocking"] = {
-    "type": "cube",
-    "to_world": mi.ScalarTransform4f.translate([0.0, 0.4, 0.0]).scale(0.3),
-}
-del scene["small-box"]
-print(f"{scene=}")
-scene = mi.load_dict(scene)
-
-img = None
-mlt_depth = 100
-j = 2
-with dr.suspend_grad():
-    for i in range(200):
-        print(f"{i=}")
-        nimg = mi.render(scene, integrator=integrator, seed=i, spp=1)
-        if i < mlt_depth:
-            img = nimg
-        else:
-            img = img * mi.Float((j - 1) / j) + img / mi.Float(j)
-            j += 1
-        mi.util.write_bitmap(f"out/{i}.png", img, write_async=False)
-
-plt.imshow(mi.util.convert_to_bitmap(img))
-plt.show()
+        ...
