@@ -78,7 +78,7 @@ class Pssmlt(mi.SamplingIntegrator):
         self.sample_count = 0
 
     def sample(
-        self: mi.SamplingIntegrator,
+        self,
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
