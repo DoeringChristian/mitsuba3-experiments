@@ -90,7 +90,7 @@ class Pssmlt(mi.SamplingIntegrator):
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
 
-        self.L = dr.select(u <= a, L, self.L)
+        self.L = dr.select(u <= a, L / a, self.L / (1 - a))
         u = dr.tile(u, self.max_depth)
         a = dr.tile(a, self.max_depth)
         self.path.vertices = dr.select(u <= a, path.vertices, self.path.vertices)
@@ -154,6 +154,7 @@ class Pssmlt(mi.SamplingIntegrator):
             em_pdf = scene.eval_emitter_direction(prev_si, ds, ~prev_bsdf_delta)
 
             mis_bsdf = mis_weight(prev_bsdf_pdf, em_pdf)
+            # mis_bsdf = 1.0
 
             # L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.) * mis_bsdf, L)
             with dr.resume_grad():
@@ -258,9 +259,9 @@ print(f"{scene=}")
 scene = mi.load_dict(scene)
 
 img = None
-mlt_depth = 8
+mlt_depth = 50
 with dr.suspend_grad():
-    for i in range(50):
+    for i in range(100):
         print(f"{i=}")
         nimg = mi.render(scene, integrator=integrator, seed=i, spp=1)
         if i < mlt_depth:
