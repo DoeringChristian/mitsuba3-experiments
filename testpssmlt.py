@@ -6,12 +6,13 @@ from dataclasses import dataclass
 
 mi.set_variant("cuda_ad_rgb")
 import pssmltpath
+import pssmltsimple
 
 
 scene = mi.cornell_box()
 integrator = mi.load_dict(
     {
-        "type": "pssmlt",
+        "type": "pssmlt_simple",
         "max_depth": 8,
         "rr_depth": 2,
     }
