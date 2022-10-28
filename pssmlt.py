@@ -257,7 +257,7 @@ scene = mi.load_dict(scene)
 img = None
 for i in range(50):
     print(f"{i=}")
-    img = mi.render(scene, integrator=integrator)
+    img = mi.render(scene, integrator=integrator, seed=i)
     mi.util.write_bitmap(f"out/{i}.png", img)
 
 plt.imshow(mi.util.convert_to_bitmap(img))
