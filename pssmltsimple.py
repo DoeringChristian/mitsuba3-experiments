@@ -77,11 +77,14 @@ class PssmltSimple(Pssmlt):
             bsdf_sample, bsdf_weight = bsdf.sample(bsdf_ctx, si, s1, s2, active_next)
             bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
 
-            # Pssmlt adjusting
+            # Pssmlt mutating
             wo = bsdf_sample.wo
             wo += self.path[depth]
             wo = dr.normalize(wo)
             path[depth] = wo
+            # Reevaluate bsdf_weight after mutating wo
+            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
+            bsdf_weigth = dr.select(bsdf_pdf > 0.0, bsdf_val / bsdf_pdf, 0.0)
 
             ray = si.spawn_ray(si.to_world(wo))
 

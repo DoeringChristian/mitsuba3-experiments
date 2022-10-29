@@ -67,6 +67,7 @@ class Pssmlt(mi.SamplingIntegrator):
     L: mi.Color3f
     sample_count = 0
     nee = True
+    cumulative_weight: mi.Float32
 
     def __init__(self, props: mi.Properties) -> None:
         self.max_depth = props.get("max_depth", def_value=16)
@@ -88,10 +89,17 @@ class Pssmlt(mi.SamplingIntegrator):
         if self.sample_count == 0:
             self.path = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
             self.L = mi.Color3f(0)
+            self.cumulative_weight = mi.Float32(0.0)
 
         L, path, valid = self.sample_rest(scene, sampler, ray, medium, active)
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
+
+        proposed_weight = 1.0 - a
+        current_weight = a
+        self.cumulative_weight = dr.select(
+            u < a, proposed_weight, self.cumulative_weight + current_weight
+        )
 
         self.L = dr.select(u < a, L, self.L)
         u = dr.tile(u, self.max_depth)
@@ -102,7 +110,7 @@ class Pssmlt(mi.SamplingIntegrator):
         dr.eval()
 
         self.sample_count += 1
-        return self.L, valid, []
+        return self.L * self.cumulative_weight, valid, []
 
     def sample_rest(
         self,
