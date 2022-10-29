@@ -38,7 +38,7 @@ j = 1
 with dr.suspend_grad():
     for i in range(100):
         print(f"{i=}")
-        nimg = mi.render(scene, integrator=integrator, seed=i, spp=4)
+        nimg = mi.render(scene, integrator=integrator, seed=i, spp=1)
         if i < mlt_depth:
             img = nimg
         else:

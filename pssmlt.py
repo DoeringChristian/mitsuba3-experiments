@@ -63,7 +63,7 @@ class Path:
 
 
 class Pssmlt(mi.SamplingIntegrator):
-    path: Path
+    wo: Path
     L: mi.Color3f
     sample_count = 0
     nee = True
@@ -87,7 +87,7 @@ class Pssmlt(mi.SamplingIntegrator):
         active: bool = True,
     ):
         if self.sample_count == 0:
-            self.path = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
+            self.wo = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
             self.L = mi.Color3f(0)
             self.cumulative_weight = mi.Float32(0.0)
 
@@ -95,8 +95,8 @@ class Pssmlt(mi.SamplingIntegrator):
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
 
-        proposed_weight = 1.0 - a
-        current_weight = a
+        proposed_weight = a
+        current_weight = 1.0 - a
         self.cumulative_weight = dr.select(
             u < a, proposed_weight, self.cumulative_weight + current_weight
         )
@@ -104,13 +104,13 @@ class Pssmlt(mi.SamplingIntegrator):
         self.L = dr.select(u < a, L, self.L)
         u = dr.tile(u, self.max_depth)
         a = dr.tile(a, self.max_depth)
-        self.path.vertices = dr.select(u < a, path.vertices, self.path.vertices)
+        self.wo.vertices = dr.select(u < a, path.vertices, self.wo.vertices)
         dr.schedule(self.L)
-        dr.schedule(self.path.vertices)
+        dr.schedule(self.wo.vertices)
         dr.eval()
 
         self.sample_count += 1
-        return self.L * self.cumulative_weight, valid, []
+        return self.L / self.cumulative_weight, valid, []
 
     def sample_rest(
         self,
