@@ -16,7 +16,7 @@ class PssmltPath(Pssmlt):
         active: bool = True,
     ) -> mi.Color3f:
 
-        path = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
+        path_wo = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
 
         # --------------------- Configure loop state ----------------------
         ray = mi.Ray3f(ray)
@@ -103,18 +103,18 @@ class PssmltPath(Pssmlt):
 
             # Pssmlt adjusting
             wo = bsdf_sample.wo
-            wo += self.path[depth]
+            wo += self.wo[depth]
             wo = dr.normalize(wo)
-            path[depth] = wo
+
+            # Reevaluate bsdf_weight after mutating wo
+            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
+
+            wo[bsdf_pdf <= 0.0] = bsdf_sample.wo
+            bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / bsdf_pdf
+
+            path_wo[depth] = wo
 
             ray = si.spawn_ray(si.to_world(wo))
-
-            if dr.grad_enabled(ray):
-                ray = dr.detach(ray)
-
-                wo = si.to_local(ray.d)
-                bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
-                bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / dr.detach(bsdf_pdf)
 
             # ------ Update loop variables based on current interaction ------
 
@@ -137,7 +137,7 @@ class PssmltPath(Pssmlt):
 
             active = active_next & (~rr_active | rr_continue) & dr.neq(fmax, 0.0)
 
-        return L, path, dr.neq(depth, 0)
+        return L, path_wo, dr.neq(depth, 0)
 
 
 mi.register_integrator("pssmlt", lambda props: PssmltPath(props))

@@ -81,6 +81,7 @@ class PssmltSimple(Pssmlt):
             wo = bsdf_sample.wo
             wo += self.wo[depth]
             wo = dr.normalize(wo)
+
             # Reevaluate bsdf_weight after mutating wo
             bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
 

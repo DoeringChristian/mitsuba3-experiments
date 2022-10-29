@@ -78,6 +78,83 @@ class Pssmlt(mi.SamplingIntegrator):
     def reset(self):
         self.sample_count = 0
 
+    def render_sample(
+        self,
+        scene: mi.Scene,
+        sensor: mi.Sensor,
+        sampler: mi.Sampler,
+        block: mi.ImageBlock,
+        aovs: list[mi.Float32],
+        pos: mi.Vector2f,
+        diff_scale_factor: mi.ScalarFloat32,
+        active: mi.Bool = True,
+    ):
+        film = sensor.film()
+        has_alpha = mi.has_flag(film.flags(), mi.FilmFlags.Alpha)
+        box_filter = film.rfilter().is_box_filter()
+
+        scale = 1.0 / mi.ScalarVector2f(film.crop_size())
+        offset = -mi.ScalarVector2f(film.crop_offset()) * scale
+
+        sample_pos = pos + sampler.next_2d(active)
+        adjusted_pos = dr.fma(sample_pos, scale, offset)
+
+        apperature_sample = mi.Point2f(0.5)
+        if sensor.needs_aperture_sample():
+            apperature_sample = sampler.next_2d(active)
+
+        time = sensor.shutter_open()
+        if sensor.shutter_open_time() > 0.0:
+            time += sampler.next_1d(active) * sensor.shutter_open_time()
+
+        wavelength_sample = 0.0
+        if mi.is_spectral:
+            wavelength_sample = sampler.next_1d(active)
+
+        ray, ray_weight = sensor.sample_ray_differential(
+            time, wavelength_sample, adjusted_pos, apperature_sample
+        )
+
+        if ray.has_differentials:
+            ray.scale_differential(diff_scale_factor)
+
+        medium = sensor.medium()
+
+        # Sampling
+        spec, valid = self.sample(scene, sampler, ray, medium, active)
+
+        spec_u = mi.unpolarized_spectrum(ray_weight * spec)
+
+        if mi.has_flag(film.flags(), mi.FilmFlags.Special):
+            film.prepare_sample(
+                spec_u,
+                ray.wavelengths,
+                aovs,
+                1.0,
+                dr.select(valid, mi.Float32(1.0), mi.Float32(0.0)),
+                valid,
+            )
+        else:
+            rgb = mi.Color3f()
+            if mi.is_spectral:
+                rgb = mi.spectrum_list_to_srgb(spec_u, ray.wavelengths, active)
+            elif mi.is_monochromatic:
+                rgb = spec_u.x
+            else:
+                rgb = spec_u
+
+            aovs[0] = rgb.x
+            aovs[1] = rgb.y
+            aovs[2] = rgb.z
+
+            if has_alpha:
+                aovs[3] = dr.select(valid, mi.Float32(1.0), mi.Float32(0.0))
+                aovs[4] = 1.0
+            else:
+                aovs[3] = 1.0
+
+        block.put(pos if box_filter else sample_pos, aovs, active)
+
     def sample(
         self,
         scene: mi.Scene,
