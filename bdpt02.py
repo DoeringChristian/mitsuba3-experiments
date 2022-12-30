@@ -201,6 +201,10 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         s_path: Path[Vertex],
         t_path: Path[Vertex],
     ) -> tuple[mi.Color3f, mi.Color3f]:
+        """
+        Perform connection between vectex s and t.
+        Returns bsdf weight at vertex s and radiance emitted from s in direction of t.
+        """
         s_p = s_path[s].p
         t_p = t_path[t].p
 
