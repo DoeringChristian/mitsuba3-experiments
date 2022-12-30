@@ -1,24 +1,23 @@
+from pssmlt import Path, Pssmlt, mis_weight
 import mitsuba as mi
 import drjit as dr
-import matplotlib.pyplot as plt
-
-mi.set_variant("cuda_ad_rgb")
 
 
-class Simple(mi.SamplingIntegrator):
-    def __init__(self, props=mi.Properties()):
+class PssmltPath(Pssmlt):
+    def __init__(self, props: mi.Properties) -> None:
         super().__init__(props)
-        self.max_depth = props.get("max_depth")
-        self.rr_depth = props.get("rr_depth")
 
-    def sample(
+    def sample_rest(
         self,
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
         medium: mi.Medium = None,
-        active: mi.Bool = True,
-    ):
+        active: bool = True,
+    ) -> mi.Color3f:
+
+        path_wo = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
+
         # --------------------- Configure loop state ----------------------
         ray = mi.Ray3f(ray)
         f = mi.Spectrum(1.0)
@@ -60,18 +59,42 @@ class Simple(mi.SamplingIntegrator):
             # ---------------------- Direct emission ----------------------
             ds = mi.DirectionSample3f(scene, si, prev_si)
             em_pdf = scene.eval_emitter_direction(prev_si, ds, ~prev_bsdf_delta)
+
+            mis_bsdf = mis_weight(prev_bsdf_pdf, em_pdf)
             # mis_bsdf = 1.0
 
             # L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.) * mis_bsdf, L)
             with dr.resume_grad():
                 # Le = f * mis_bsdf * ds.emitter.eval(si)
-                L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.0), L)
+                L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.0) * mis_bsdf, L)
 
             active_next = (depth + 1 < self.max_depth) & si.is_valid()
 
-            # ---------------------- BSDF sampling ----------------------
-            bsdf: mi.BSDF = si.bsdf(ray)
+            # ---------------------- Emitter sampling ----------------------
 
+            bsdf: mi.BSDF = si.bsdf(ray)
+            active_em = active_next & mi.has_flag(bsdf.flags(), mi.BSDFFlags.All)
+
+            ds, em_weight = scene.sample_emitter_direction(
+                si, sampler.next_2d(), True, active_em
+            )
+            active_em &= dr.neq(ds.pdf, 0.0)
+
+            with dr.resume_grad():
+                ds.d = dr.normalize(ds.p - si.p)
+                em_val = scene.eval_emitter_direction(si, ds, active_em)
+                em_weight = dr.select(dr.neq(ds.pdf, 0), em_val / ds.pdf, 0)
+                dr.disable_grad(ds.d)
+
+            wo = si.to_local(ds.d)
+            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active_em)
+            bsdf_val = si.to_world_mueller(bsdf_val, -wo, si.wi)
+
+            mis_em = dr.select(ds.delta, 1.0, mis_weight(ds.pdf, bsdf_pdf))
+
+            L[active_em] = dr.fma(f, bsdf_val * em_weight * mis_em, L)
+
+            # ---------------------- BSDF sampling ----------------------
             s1 = sampler.next_1d()
             s2 = sampler.next_2d()
 
@@ -80,15 +103,18 @@ class Simple(mi.SamplingIntegrator):
 
             # Pssmlt adjusting
             wo = bsdf_sample.wo
+            wo += self.wo[depth]
+            wo = dr.normalize(wo)
+
+            # Reevaluate bsdf_weight after mutating wo
+            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
+
+            wo[bsdf_pdf <= 0.0] = bsdf_sample.wo
+            bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / bsdf_pdf
+
+            path_wo[depth] = wo
 
             ray = si.spawn_ray(si.to_world(wo))
-
-            if dr.grad_enabled(ray):
-                ray = dr.detach(ray)
-
-                wo = si.to_local(ray.d)
-                bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
-                bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / dr.detach(bsdf_pdf)
 
             # ------ Update loop variables based on current interaction ------
 
@@ -111,22 +137,7 @@ class Simple(mi.SamplingIntegrator):
 
             active = active_next & (~rr_active | rr_continue) & dr.neq(fmax, 0.0)
 
-        return L, dr.neq(depth, 0), []
+        return L, path_wo, dr.neq(depth, 0)
 
 
-mi.register_integrator("integrator", lambda props: Simple(props))
-
-scene = mi.cornell_box()
-scene["integrator"]["type"] = "integrator"
-scene["integrator"]["max_depth"] = 16
-scene["integrator"]["rr_depth"] = 2
-scene["sensor"]["sampler"]["sample_count"] = 64
-scene["sensor"]["film"]["width"] = 1024
-scene["sensor"]["film"]["height"] = 1024
-scene = mi.load_dict(scene)
-
-img = mi.render(scene)
-
-plt.imshow(img ** (1.0 / 2.2))
-plt.axis("off")
-plt.show()
+mi.register_integrator("pssmlt", lambda props: PssmltPath(props))

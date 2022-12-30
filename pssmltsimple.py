@@ -1,24 +1,23 @@
+from pssmlt import Path, Pssmlt
 import mitsuba as mi
 import drjit as dr
-import matplotlib.pyplot as plt
-
-mi.set_variant("cuda_ad_rgb")
 
 
-class Simple(mi.SamplingIntegrator):
-    def __init__(self, props=mi.Properties()):
+class PssmltSimple(Pssmlt):
+    def __init__(self, props: mi.Properties) -> None:
         super().__init__(props)
-        self.max_depth = props.get("max_depth")
-        self.rr_depth = props.get("rr_depth")
 
-    def sample(
+    def sample_rest(
         self,
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
         medium: mi.Medium = None,
-        active: mi.Bool = True,
-    ):
+        active: bool = True,
+    ) -> mi.Color3f:
+
+        path_wo = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
+
         # --------------------- Configure loop state ----------------------
         ray = mi.Ray3f(ray)
         f = mi.Spectrum(1.0)
@@ -78,12 +77,22 @@ class Simple(mi.SamplingIntegrator):
             bsdf_sample, bsdf_weight = bsdf.sample(bsdf_ctx, si, s1, s2, active_next)
             bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
 
-            # Pssmlt adjusting
+            # Pssmlt mutating
             wo = bsdf_sample.wo
+            wo += self.wo[depth]
+            wo = dr.normalize(wo)
+
+            # Reevaluate bsdf_weight after mutating wo
+            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
+
+            wo[bsdf_pdf <= 0.0] = bsdf_sample.wo
+            bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / bsdf_pdf
+
+            path_wo[depth] = wo
 
             ray = si.spawn_ray(si.to_world(wo))
 
-            if dr.grad_enabled(ray):
+            if False:
                 ray = dr.detach(ray)
 
                 wo = si.to_local(ray.d)
@@ -111,22 +120,7 @@ class Simple(mi.SamplingIntegrator):
 
             active = active_next & (~rr_active | rr_continue) & dr.neq(fmax, 0.0)
 
-        return L, dr.neq(depth, 0), []
+        return L, path_wo, dr.neq(depth, 0)
 
 
-mi.register_integrator("integrator", lambda props: Simple(props))
-
-scene = mi.cornell_box()
-scene["integrator"]["type"] = "integrator"
-scene["integrator"]["max_depth"] = 16
-scene["integrator"]["rr_depth"] = 2
-scene["sensor"]["sampler"]["sample_count"] = 64
-scene["sensor"]["film"]["width"] = 1024
-scene["sensor"]["film"]["height"] = 1024
-scene = mi.load_dict(scene)
-
-img = mi.render(scene)
-
-plt.imshow(img ** (1.0 / 2.2))
-plt.axis("off")
-plt.show()
+mi.register_integrator("pssmlt_simple", lambda props: PssmltSimple(props))

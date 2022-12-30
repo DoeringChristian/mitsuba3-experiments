@@ -1,3 +1,8 @@
 scenes.zip
 scenes/
 .venv
+<<<<<<< HEAD
+=======
+out/
+__pycache__
+>>>>>>> 972dd93425c144bbee5b3d5c92ce5f591688345a
