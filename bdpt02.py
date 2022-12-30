@@ -26,11 +26,13 @@ class Vertex:
         self.p: mi.Point3f = dr.zeros(mi.Point3f)
         self.f: mi.Color3f = dr.zeros(mi.Color3f)
         self.L: mi.Color3f = dr.zeros(mi.Color3f)
+        self.wi: mi.Vector3f = dr.zeros(mi.Vector3f)
 
     DRJIT_STRUCT = {
         "p": mi.Point3f,
         "f": mi.Color3f,
         "L": mi.Color3f,
+        "wi": mi.Vector3f,
     }
 
 
@@ -122,6 +124,7 @@ class BDPTIntegrator(mi.SamplingIntegrator):
             vertex.f = f
             vertex.L = L
             vertex.p = si.p
+            vertex.wi = si.to_world(si.wi)
             path[depth] = vertex
 
             f *= bsdf_val
@@ -182,6 +185,7 @@ class BDPTIntegrator(mi.SamplingIntegrator):
             vertex.f = f
             vertex.L = L
             vertex.p = si.p
+            vertex.wi = si.to_world(si.wi)
             path[depth] = vertex
 
             f *= bsdf_val
@@ -216,7 +220,8 @@ class BDPTIntegrator(mi.SamplingIntegrator):
 
         bsdf: mi.BSDF = si.bsdf()
 
-        wo = si.to_local(dr.normalize(s_path[s - 1].p - s_p))
+        # wo = si.to_local(dr.normalize(s_path[s - 1].p - s_p))
+        wo = si.to_local(s_path[s].wi)
         weight, pdf = bsdf.eval_pdf(mi.BSDFContext(), si, wo)
         weight = dr.select(pdf > 0, weight / pdf, 0.0)
 
