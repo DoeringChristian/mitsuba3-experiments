@@ -228,11 +228,10 @@ class BDPTIntegrator(mi.SamplingIntegrator):
 
         bsdf: mi.BSDF = si.bsdf()
 
-        # wo = si.to_local(dr.normalize(s_path[s - 1].p - s_p))
         wo = si.to_local(s_path[s].wi)
         weight, pdf = bsdf.eval_pdf(mi.BSDFContext(), si, wo, active)
-        weight = dr.select(active, weight, 0.0)
         weight = dr.select(pdf > 0, weight / pdf, 0.0)
+        weight = dr.select(active, weight, 0.0)
 
         emitter: mi.Emitter = si.emitter(scene, active)
         Le = emitter.eval(si, active)
