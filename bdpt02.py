@@ -208,6 +208,11 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         """
         Perform connection between vectex s and t.
         Returns bsdf weight at vertex s and radiance emitted from s in direction of t.
+
+        s0   s1   s2   t2   t1   t0
+        o -- o -- o .. o -- o -- o
+
+        first ray is cast from t2 to s2 to get surface interaction at s2
         """
         s_p = s_path[s].p
         t_p = t_path[t].p
@@ -216,17 +221,20 @@ class BDPTIntegrator(mi.SamplingIntegrator):
 
         t2s_ray = mi.Ray3f(t_p, t2s_dir)
 
-        si: mi.SurfaceInteraction3f = scene.ray_intersect(t2s_ray)
+        active = scene.ray_test(mi.Ray3f(t2s_ray, dr.norm(s_p - t_p)))
+
+        si: mi.SurfaceInteraction3f = scene.ray_intersect(t2s_ray, active)
 
         bsdf: mi.BSDF = si.bsdf()
 
         # wo = si.to_local(dr.normalize(s_path[s - 1].p - s_p))
         wo = si.to_local(s_path[s].wi)
-        weight, pdf = bsdf.eval_pdf(mi.BSDFContext(), si, wo)
+        weight, pdf = bsdf.eval_pdf(mi.BSDFContext(), si, wo, active)
+        weight = dr.select(active, weight, 0.0)
         weight = dr.select(pdf > 0, weight / pdf, 0.0)
 
-        emitter: mi.Emitter = si.emitter(scene)
-        Le = emitter.eval(si)
+        emitter: mi.Emitter = si.emitter(scene, active)
+        Le = emitter.eval(si, active)
 
         return weight, Le
 
