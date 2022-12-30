@@ -193,26 +193,26 @@ class BDPTIntegrator(mi.SamplingIntegrator):
 
         return path
 
-    def camera_connection(
+    def connect_s2t(
         self,
         scene: mi.Scene,
         s: mi.UInt32,
         t: mi.UInt32,
-        camera_path: Path[Vertex],
-        light_path: Path[Vertex],
+        s_path: Path[Vertex],
+        t_path: Path[Vertex],
     ) -> tuple[mi.Color3f, mi.Color3f]:
-        camera_p = camera_path[s].p
-        light_p = light_path[t].p
+        s_p = s_path[s].p
+        t_p = t_path[t].p
 
-        l2c_dir = dr.normalize(camera_p - light_p)
+        t2s_dir = dr.normalize(s_p - t_p)
 
-        l2c_ray = mi.Ray3f(light_p, l2c_dir)
+        t2s_ray = mi.Ray3f(t_p, t2s_dir)
 
-        si: mi.SurfaceInteraction3f = scene.ray_intersect(l2c_ray)
+        si: mi.SurfaceInteraction3f = scene.ray_intersect(t2s_ray)
 
         bsdf: mi.BSDF = si.bsdf()
 
-        wo = si.to_local(dr.normalize(camera_path[s - 1].p - camera_p))
+        wo = si.to_local(dr.normalize(s_path[s - 1].p - s_p))
         weight, pdf = bsdf.eval_pdf(mi.BSDFContext(), si, wo)
         weight = dr.select(pdf > 0, weight / pdf, 0.0)
 
@@ -230,12 +230,10 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         light_path: Path[Vertex],
     ) -> mi.Color3f:
 
-        camera_weight, camera_Le = self.camera_connection(
+        camera_weight, camera_Le = self.connect_s2t(
             scene, s, t, camera_path, light_path
         )
-        light_weight, light_Le = self.camera_connection(
-            scene, t, s, light_path, camera_path
-        )
+        light_weight, light_Le = self.connect_s2t(scene, t, s, light_path, camera_path)
 
         L = (
             camera_path[s].L
