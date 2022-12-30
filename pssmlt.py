@@ -64,6 +64,32 @@ class Path:
             return dr.gather(self.dtype, self.vertices, idx[0] * self.n_rays + idx[1])
 
 
+class MLTSampler(mi.Sampler):
+    def __init__(self, props: mi.Properties) -> None:
+        super().__init__(props)
+        self.prng = mi.PCG32()
+
+    def next_1d(self, active: bool = True) -> float:
+        return super().next_1d(active)
+
+    def next_2d(self, active: bool = True) -> mi.Point2f:
+        return super().next_2d(active)
+
+    def advance(self) -> None:
+        return super().advance()
+
+    def seed(self, seed: int, wavefront_size: int = 4294967295) -> None:
+        super().seed(seed, wavefront_size)
+
+        self.mutation_idx = dr.arange(mi.UInt32, self.wavefront_size())
+
+        idx = dr.arange(mi.UInt32, self.wavefront_size())
+        tmp = dr.opaque(seed)
+
+        v0, v1 = mi.sample_tea_32(idx, tmp)
+        self.prng.seed(1, v0, v1)
+
+
 class Pssmlt(mi.SamplingIntegrator):
     path: Path
     L: mi.Color3f
