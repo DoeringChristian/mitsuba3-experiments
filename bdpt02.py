@@ -212,7 +212,8 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         s0   s1   s2   t2   t1   t0
         o -- o -- o .. o -- o -- o
 
-        first ray is cast from t2 to s2 to get surface interaction at s2
+        first ray is cast from t2 to s2 to test if the points are visible to each other and to get surface interaction at s2.
+        Then we use wi (s2 -> s1) to calculate the bsdf weight.
         """
         s_p = s_path[s].p
         t_p = t_path[t].p
