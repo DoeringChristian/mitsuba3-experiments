@@ -200,7 +200,7 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         t: mi.UInt32,
         camera_path: Path[Vertex],
         light_path: Path[Vertex],
-    ) -> tuple[mi.Color3f, mi.SurfaceInteraction3f]:
+    ) -> tuple[mi.Color3f, mi.Color3f]:
         camera_p = camera_path[s].p
         light_p = light_path[t].p
 
@@ -208,17 +208,18 @@ class BDPTIntegrator(mi.SamplingIntegrator):
 
         l2c_ray = mi.Ray3f(light_p, l2c_dir)
 
-        camera_si: mi.SurfaceInteraction3f = scene.ray_intersect(l2c_ray)
+        si: mi.SurfaceInteraction3f = scene.ray_intersect(l2c_ray)
 
-        camera_bsdf: mi.BSDF = camera_si.bsdf()
+        bsdf: mi.BSDF = si.bsdf()
 
-        camera_wo = camera_si.to_local(dr.normalize(camera_path[s - 1].p - camera_p))
-        camera_weight, camera_pdf = camera_bsdf.eval_pdf(
-            mi.BSDFContext(), camera_si, camera_wo
-        )
-        camera_weight = dr.select(camera_pdf > 0, camera_weight / camera_pdf, 0.0)
+        wo = si.to_local(dr.normalize(camera_path[s - 1].p - camera_p))
+        weight, pdf = bsdf.eval_pdf(mi.BSDFContext(), si, wo)
+        weight = dr.select(pdf > 0, weight / pdf, 0.0)
 
-        return camera_weight, camera_si
+        emitter: mi.Emitter = si.emitter(scene)
+        Le = emitter.eval(si)
+
+        return weight, Le
 
     def connect_bdpt(
         self,
@@ -229,18 +230,16 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         light_path: Path[Vertex],
     ) -> mi.Color3f:
 
-        camera_weight, camera_si = self.camera_connection(
+        camera_weight, camera_Le = self.camera_connection(
             scene, s, t, camera_path, light_path
         )
-        light_weight, light_si = self.camera_connection(
+        light_weight, light_Le = self.camera_connection(
             scene, t, s, light_path, camera_path
         )
 
-        light_e = mi.Color3f(0.0)
-
         L = (
             camera_path[s].L
-            + camera_path[s].f * camera_weight * light_e
+            + camera_path[s].f * camera_weight * light_Le
             + camera_path[s].f * camera_weight * light_weight * light_path[t].L
         )
         return L
