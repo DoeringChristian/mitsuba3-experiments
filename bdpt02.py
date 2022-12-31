@@ -81,11 +81,18 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         self, scene: mi.Scene, sampler: mi.Sampler, active: bool = True
     ) -> Path[Vertex]:
         wavefront_size = sampler.wavefront_size()
-        path = Path(Vertex, wavefront_size, self.max_depth)
+        path = Path(Vertex, wavefront_size, self.max_depth + 1)
 
         ray, ray_weight, emitter = scene.sample_emitter_ray(
             0.0, sampler.next_1d(), sampler.next_2d(), sampler.next_2d(), active
         )
+
+        vertex = Vertex()
+        vertex.f = mi.Color3f(1.0)
+        vertex.L = ray_weight
+        vertex.p = ray.o
+        vertex.wi = dr.zeros(mi.Vector3f)
+        path[mi.UInt32(0)] = vertex
 
         bsdf_ctx = mi.BSDFContext()
 
@@ -120,15 +127,15 @@ class BDPTIntegrator(mi.SamplingIntegrator):
             )
             ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
 
+            f *= bsdf_val
+            L = f * L + Le
+
             vertex = Vertex()
             vertex.f = f
             vertex.L = L
             vertex.p = si.p
             vertex.wi = si.to_world(si.wi)
-            path[depth] = vertex
-
-            f *= bsdf_val
-            L = f * L + Le
+            path[depth + 1] = vertex
 
             prev_si = dr.detach(si, True)
 
@@ -141,7 +148,14 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         self, scene: mi.Scene, sampler: mi.Sampler, ray: mi.Ray3f, active: bool = True
     ) -> Path[Vertex]:
         wavefront_size = sampler.wavefront_size()
-        path = Path(Vertex, wavefront_size, self.max_depth)
+        path = Path(Vertex, wavefront_size, self.max_depth + 1)
+
+        vertex = Vertex()
+        vertex.f = mi.Color3f(1.0)
+        vertex.L = mi.Color3f(1.0)
+        vertex.p = ray.o
+        vertex.wi = dr.zeros(mi.Vector3f)
+        path[mi.UInt32(0)] = vertex
 
         bsdf_ctx = mi.BSDFContext()
 
@@ -180,15 +194,14 @@ class BDPTIntegrator(mi.SamplingIntegrator):
             ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
 
             L = L + Le
+            f *= bsdf_val
 
             vertex = Vertex()
             vertex.f = f
             vertex.L = L
             vertex.p = si.p
             vertex.wi = si.to_world(si.wi)
-            path[depth] = vertex
-
-            f *= bsdf_val
+            path[depth + 1] = vertex
 
             prev_si = dr.detach(si, True)
 
@@ -252,12 +265,14 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         )
         light_weight, light_Le = self.connect_s2t(scene, t, s, light_path, camera_path)
 
+        camera_weight = dr.select(s == 0, 1.0, camera_weight)
+
         L = (
             camera_path[s].L
             + camera_path[s].f * camera_weight * light_Le
             + camera_path[s].f * camera_weight * light_weight * light_path[t].L
         )
-        return L
+        return light_weight
 
     def sample(
         self,
