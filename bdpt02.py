@@ -259,7 +259,6 @@ class BDPTIntegrator(mi.SamplingIntegrator):
         camera_path: Path[Vertex],
         light_path: Path[Vertex],
     ) -> mi.Color3f:
-
         camera_weight, camera_Le = self.connect_s2t(
             scene, s, t, camera_path, light_path
         )
