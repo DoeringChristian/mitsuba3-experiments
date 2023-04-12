@@ -15,7 +15,6 @@ class PssmltSimple(Pssmlt):
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:
-
         path_wo = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
 
         # --------------------- Configure loop state ----------------------
@@ -117,6 +116,8 @@ class PssmltSimple(Pssmlt):
             rr_prob = dr.minimum(fmax * dr.sqr(eta), 0.95)
             rr_active = depth >= self.rr_depth
             rr_continue = sampler.next_1d() < rr_prob
+
+            f[rr_active] *= dr.rcp(dr.detach(rr_prob))
 
             active = active_next & (~rr_active | rr_continue) & dr.neq(fmax, 0.0)
 

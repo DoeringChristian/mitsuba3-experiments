@@ -12,7 +12,7 @@ import pssmltsimple
 scene = mi.cornell_box()
 integrator = mi.load_dict(
     {
-        "type": "pssmlt_simple",
+        "type": "pssmlt",
         "max_depth": 8,
         "rr_depth": 2,
     }
