@@ -269,8 +269,9 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             dist = dr.dot(q_n.x_v - q.x_v, q_n.x_v - q.x_v)
             active = dist < self.dist_threshold | (
-                dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
+                dr.dot(q_n.n_v, q.n_v) < dr.cos(self.angle_threshold)
             )
+            # active = mi.Bool(True)
 
             R_n = dr.gather(
                 RestirReservoir, self.temporal_reservoir, self.to_idx(p), active
