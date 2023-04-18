@@ -118,7 +118,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         self.sample_initial(scene, sampler, sensor, pos)
         self.temporal_resampling(sampler, idx)
         self.spatial_resampling(scene, sampler, pos)
-        img = self.render_final(False)
+        img = self.render_final(True)
         dr.eval()
 
         # return mi.TensorXf(
@@ -140,6 +140,34 @@ class PathIntegrator(mi.SamplingIntegrator):
         return mi.TensorXf(
             dr.ravel(color), shape=[self.film_size.x, self.film_size.y, 3]
         )
+
+    def combine_reservoir(
+        self,
+        scene: mi.Scene,
+        Rs: RestirReservoir,
+        Rn: RestirReservoir,
+        q: RestirSample,
+        q_n: RestirSample,
+        sampler: mi.Sampler,
+    ):
+        Rn_m = dr.minimum(Rn.M, self.M_MAX)
+        Rn_hat = p_hat(Rn.z.L_o)
+        shadowed = scene.ray_test(mi.Ray3f(q.x_v, dr.normalize(Rn.z.x_s - q.x_v)))
+
+        w_qq = q.x_v - q.x_s
+        w_qq_len = dr.norm(w_qq)
+        w_qq /= w_qq_len
+        w_rq = Rn.z.x_v - q.x_s
+        w_rq_len = dr.norm(w_rq)
+        w_rq /= w_rq_len
+        qq = w_qq_len * w_qq_len
+        rq = w_rq_len * w_rq_len
+        div = rq * dr.abs(dr.dot(w_qq, q.n_s))
+        j = dr.select(div == 0, 0, dr.abs(dr.dot(w_rq, q.n_s)) * qq / div)
+        Rn_hat = dr.select(j == 0 | shadowed, 0, Rn_hat / j)
+
+        factor = Rn_hat * Rn_m * Rn.W
+        Rs.update(sampler, Rn.z, factor)
 
     def spatial_resampling(
         self, scene: mi.Scene, sampler: mi.Sampler, pos: mi.Vector2u
@@ -209,6 +237,8 @@ class PathIntegrator(mi.SamplingIntegrator):
                 RestirReservoir, self.temporal_reservoir, self.to_idx(p), active
             )
 
+            self.combine_reservoir(scene, R_s, R_n, q, q_n, sampler)
+
             Q_h[i] = R_n.M
             Q[i] = q_n.x_s
             sum += R_n.M
@@ -229,22 +259,22 @@ class PathIntegrator(mi.SamplingIntegrator):
         sampler: mi.Sampler,
         idx: mi.UInt,
     ):
-        S: RestirSample = dr.gather(
-            RestirSample,
-            self.initial_sample,
-            idx,
-        )
-        R: RestirReservoir = dr.gather(RestirReservoir, self.temporal_reservoir, idx)
-        # S = self.initial_sample
-        # R = self.temporal_reservoir
+        # S: RestirSample = dr.gather(
+        #     RestirSample,
+        #     self.initial_sample,
+        #     idx,
+        # )
+        # R: RestirReservoir = dr.gather(RestirReservoir, self.temporal_reservoir, idx)
+        S = self.initial_sample
+        R = self.temporal_reservoir
 
         w = p_hat(S.L_o) / S.p_q
         R.update(sampler, S, w)
         phat = p_hat(R.z.L_o)
         R.W = dr.select(phat == 0, 0, R.w / (R.M * phat))
 
-        dr.scatter(self.temporal_reservoir, R, idx)
-        # self.temporal_reservoir = R
+        # dr.scatter(self.temporal_reservoir, R, idx)
+        self.temporal_reservoir = R
 
     def sample_initial(
         self, scene: mi.Scene, sampler: mi.Sampler, sensor: mi.Sensor, pos: mi.Vector2u
@@ -433,5 +463,5 @@ if __name__ == "__main__":
         size = sensor.film().crop_size()
 
         for i in range(8):
-            img = integrator.render(scene, sensor)
+            img = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/{i}.jpg", img)
