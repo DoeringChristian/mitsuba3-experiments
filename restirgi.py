@@ -116,26 +116,34 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
         self.sample_initial(scene, sampler, sensor, pos)
+        dr.schedule(self.initial_sample)
+        dr.eval()
         self.temporal_resampling(sampler, idx)
+        dr.schedule(self.temporal_reservoir)
+        dr.eval()
         self.spatial_resampling(scene, sampler, pos)
-        img = self.render_final(True)
+        dr.schedule(self.spatial_reservoir)
+        img = self.render_final("temporal")
+        dr.schedule(img)
         dr.eval()
 
-        # return mi.TensorXf(
-        #     dr.ravel(self.temporal_reservoir.z.n_v),
-        #     shape=[self.film_size.x, self.film_size.y, 3],
-        # )
         return img
 
-    def render_final(self, spatial=True) -> mi.TensorXf:
+    def render_final(self, mode: str = "spatial") -> mi.TensorXf:
         assert self.film_size is not None
-        if spatial:
+        if mode == "spatial":
             R = self.spatial_reservoir
-        else:
+            S = R.z
+            wi = dr.normalize(S.x_s - S.x_v)
+            color = S.f * S.L_o * R.W + self.emittance
+        elif mode == "temporal":
             R = self.temporal_reservoir
-        S = R.z
-        wi = dr.normalize(S.x_s - S.x_v)
-        color = S.f * S.L_o * R.W + self.emittance
+            S = R.z
+            wi = dr.normalize(S.x_s - S.x_v)
+            color = S.f * S.L_o * R.W + self.emittance
+        else:
+            S = self.initial_sample
+            color = S.f * S.L_o + self.emittance
 
         return mi.TensorXf(
             dr.ravel(color), shape=[self.film_size.x, self.film_size.y, 3]
@@ -176,7 +184,7 @@ class PathIntegrator(mi.SamplingIntegrator):
 
         max_iter = dr.select(R_s.M < self.M_MAX / 2, 9, 3)
 
-        q: RestirSample = dr.gather(RestirSample, self.initial_sample, self.to_idx(pos))
+        q = self.initial_sample
 
         q_n = RestirSample()
         R_n = RestirReservoir()
@@ -214,7 +222,6 @@ class PathIntegrator(mi.SamplingIntegrator):
             mi.Bool(),
             mi.Bool(),
         ]
-        # q_cnt = mi.UInt()
 
         Z = R_s.M
         sum = R_s.M
@@ -257,12 +264,6 @@ class PathIntegrator(mi.SamplingIntegrator):
         sampler: mi.Sampler,
         idx: mi.UInt,
     ):
-        # S: RestirSample = dr.gather(
-        #     RestirSample,
-        #     self.initial_sample,
-        #     idx,
-        # )
-        # R: RestirReservoir = dr.gather(RestirReservoir, self.temporal_reservoir, idx)
         S = self.initial_sample
         R = self.temporal_reservoir
 
@@ -271,7 +272,6 @@ class PathIntegrator(mi.SamplingIntegrator):
         phat = p_hat(R.z.L_o)
         R.W = dr.select(phat == 0, 0, R.w / (R.M * phat))
 
-        # dr.scatter(self.temporal_reservoir, R, idx)
         self.temporal_reservoir = R
 
     def sample_initial(
