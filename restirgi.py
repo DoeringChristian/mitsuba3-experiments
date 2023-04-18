@@ -172,9 +172,7 @@ class PathIntegrator(mi.SamplingIntegrator):
     def spatial_resampling(
         self, scene: mi.Scene, sampler: mi.Sampler, pos: mi.Vector2u
     ):
-        R_s: RestirReservoir = dr.gather(
-            RestirReservoir, self.spatial_reservoir, self.to_idx(pos)
-        )
+        R_s = self.spatial_reservoir
 
         max_iter = dr.select(R_s.M < self.M_MAX / 2, 9, 3)
 
@@ -462,6 +460,6 @@ if __name__ == "__main__":
         sensor: mi.Sensor = scene.sensors()[0]
         size = sensor.film().crop_size()
 
-        for i in range(8):
+        for i in range(10):
             img = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/{i}.jpg", img)
