@@ -65,10 +65,25 @@ class RestirReservoir:
         "M": mi.UInt,
     }
 
-    def update(self, sampler: mi.Sampler, snew: RestirSample, wnew: mi.Float):
-        self.w += wnew
-        self.M += 1
-        self.z = dr.select(sampler.next_1d() < wnew / self.w, snew, self.z)
+    def update(
+        self,
+        sampler: mi.Sampler,
+        snew: RestirSample,
+        wnew: mi.Float,
+        active: mi.Bool = True,
+    ):
+        active = mi.Bool(active)
+        self.w += dr.select(active, wnew, 0)
+        self.M += dr.select(active, 1, 0)
+        self.z = dr.select(active & (sampler.next_1d() < wnew / self.w), snew, self.z)
+
+    def merge(
+        self, sampler: mi.Sampler, r: "RestirReservoir", p, active: mi.Bool = True
+    ):
+        active = mi.Bool(active)
+        M0 = self.M
+        self.update(sampler, r.z, p * r.W * r.M, active)
+        self.M = dr.select(active, M0 + r.M, M0)
 
 
 class PathIntegrator(mi.SamplingIntegrator):
@@ -175,6 +190,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         q: RestirSample,
         q_n: RestirSample,
         sampler: mi.Sampler,
+        active: mi.Bool,
     ):
         Rn_m = dr.minimum(Rn.M, self.M_MAX)
         Rn_hat = p_hat(Rn.z.L_o)
@@ -192,8 +208,8 @@ class PathIntegrator(mi.SamplingIntegrator):
         j = dr.select(div == 0, 0, dr.abs(dr.dot(w_rq, q.n_s)) * qq / div)
         Rn_hat = dr.select(j == 0 | shadowed, 0, Rn_hat / j)
 
-        factor = Rn_hat * Rn_m * Rn.W
-        Rs.update(sampler, Rn.z, factor)
+        # factor = Rn_hat * Rn_m * Rn.W
+        Rs.merge(sampler, Rn, Rn_hat, active)
 
     def spatial_resampling(
         self, scene: mi.Scene, sampler: mi.Sampler, pos: mi.Vector2u
@@ -252,15 +268,15 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
             dist = dr.dot(q_n.x_v - q.x_v, q_n.x_v - q.x_v)
-            active = dist > self.dist_threshold | (
-                dr.dot(q_n.n_v, q.n_v) < dr.cos(self.angle_threshold)
+            active = dist < self.dist_threshold | (
+                dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
             )
 
             R_n = dr.gather(
                 RestirReservoir, self.temporal_reservoir, self.to_idx(p), active
             )
 
-            self.combine_reservoir(scene, R_s, R_n, q, q_n, sampler)
+            self.combine_reservoir(scene, R_s, R_n, q, q_n, sampler, active)
 
             Q_h[i] = R_n.M
             Q[i] = q_n.x_s
