@@ -497,8 +497,17 @@ if __name__ == "__main__":
         sensor: mi.Sensor = scene.sensors()[0]
         size = sensor.film().crop_size()
 
+        img_acc = None
+
         for i in range(100):
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
             mi.util.write_bitmap(f"out/spatial{i}.jpg", imgs[2])
+
+            if img_acc is None:
+                img_acc = imgs[0]
+            else:
+                img_acc = img_acc * float(i - 1) / float(i) + imgs[0] / i
+
+            mi.util.write_bitmap(f"out/acc{i}.jpg", img_acc)
