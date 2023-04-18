@@ -20,6 +20,17 @@ def p_hat(f):
     return dr.norm(f)
 
 
+def ray_from_to(a: mi.Point3f, b: mi.Point3f) -> mi.Ray3f:
+    epsilon = dr.epsilon(mi.Point3f)
+    return mi.Ray3f(
+        a + epsilon,
+        dr.normalize(b - a),
+        maxt=dr.norm(b - a) - epsilon,
+        time=0,
+        wavelengths=[],
+    )
+
+
 class RestirSample:
     x_v: mi.Vector3f
     n_v: mi.Vector3f
@@ -123,30 +134,37 @@ class PathIntegrator(mi.SamplingIntegrator):
         dr.eval()
         self.spatial_resampling(scene, sampler, pos)
         dr.schedule(self.spatial_reservoir)
-        img = self.render_final("temporal")
-        dr.schedule(img)
+        imgs = self.render_final()
+        dr.schedule(imgs)
         dr.eval()
 
-        return img
+        return imgs
 
-    def render_final(self, mode: str = "spatial") -> mi.TensorXf:
+    def render_final(self) -> tuple[mi.TensorXf, mi.TensorXf, mi.TensorXf]:
         assert self.film_size is not None
-        if mode == "spatial":
-            R = self.spatial_reservoir
-            S = R.z
-            wi = dr.normalize(S.x_s - S.x_v)
-            color = S.f * S.L_o * R.W + self.emittance
-        elif mode == "temporal":
-            R = self.temporal_reservoir
-            S = R.z
-            wi = dr.normalize(S.x_s - S.x_v)
-            color = S.f * S.L_o * R.W + self.emittance
-        else:
-            S = self.initial_sample
-            color = S.f * S.L_o + self.emittance
+        R = self.spatial_reservoir
+        S = R.z
+        wi = dr.normalize(S.x_s - S.x_v)
+        spatial = S.f * S.L_o * R.W + self.emittance
 
-        return mi.TensorXf(
-            dr.ravel(color), shape=[self.film_size.x, self.film_size.y, 3]
+        R = self.temporal_reservoir
+        S = R.z
+        wi = dr.normalize(S.x_s - S.x_v)
+        temporal = S.f * S.L_o * R.W + self.emittance
+
+        S = self.initial_sample
+        initial = S.f * S.L_o + self.emittance
+
+        return (
+            mi.TensorXf(
+                dr.ravel(initial), shape=[self.film_size.x, self.film_size.y, 3]
+            ),
+            mi.TensorXf(
+                dr.ravel(temporal), shape=[self.film_size.x, self.film_size.y, 3]
+            ),
+            mi.TensorXf(
+                dr.ravel(spatial), shape=[self.film_size.x, self.film_size.y, 3]
+            ),
         )
 
     def combine_reservoir(
@@ -160,7 +178,7 @@ class PathIntegrator(mi.SamplingIntegrator):
     ):
         Rn_m = dr.minimum(Rn.M, self.M_MAX)
         Rn_hat = p_hat(Rn.z.L_o)
-        shadowed = scene.ray_test(mi.Ray3f(q.x_v, dr.normalize(Rn.z.x_s - q.x_v)))
+        shadowed = scene.ray_test(ray_from_to(q.x_v, Rn.z.x_s))
 
         w_qq = q.x_v - q.x_s
         w_qq_len = dr.norm(w_qq)
@@ -246,14 +264,13 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             Q_h[i] = R_n.M
             Q[i] = q_n.x_s
+            Q_active[i] = active
             sum += R_n.M
 
         phat_val = p_hat(R_s.z.L_o)
         for i in range(len(Q)):
-            shadowed = scene.ray_test(
-                mi.Ray3f(R_s.z.x_v, dr.normalize(Q[i] - R_s.z.x_v))
-            )
-            Z += dr.select(~shadowed & (phat_val > 0.0), Q_h[i], 0)
+            shadowed = scene.ray_test(ray_from_to(R_s.z.x_v, Q[i]))
+            Z += dr.select(~shadowed & (phat_val > 0.0) & Q_active[i], Q_h[i], 0)
 
         R_s.M = dr.minimum(sum, self.M_MAX)
         R_s.W = Z * dr.select(phat_val == 0, 0, R_s.w / (Z * phat_val))
@@ -449,7 +466,11 @@ mi.register_integrator("path_test", lambda props: PathIntegrator(props))
 
 if __name__ == "__main__":
     with dr.suspend_grad():
-        scene: mi.Scene = mi.load_dict(mi.cornell_box())
+        scene = mi.cornell_box()
+        scene["sensor"]["film"]["width"] = 1024
+        scene["sensor"]["film"]["height"] = 1024
+        print(f"{scene=}")
+        scene: mi.Scene = mi.load_dict(scene)
 
         integrator: PathIntegrator = mi.load_dict(
             {
@@ -460,6 +481,8 @@ if __name__ == "__main__":
         sensor: mi.Sensor = scene.sensors()[0]
         size = sensor.film().crop_size()
 
-        for i in range(10):
-            img = integrator.render(scene, sensor, seed=i)
-            mi.util.write_bitmap(f"out/{i}.jpg", img)
+        for i in range(100):
+            imgs = integrator.render(scene, sensor, seed=i)
+            mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
+            mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
+            mi.util.write_bitmap(f"out/spatial{i}.jpg", imgs[2])
