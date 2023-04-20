@@ -209,7 +209,8 @@ class PathIntegrator(mi.SamplingIntegrator):
         j = dr.select(div == 0, 0, dr.abs(dr.dot(w_rq, q.n_s)) * qq / div)
         Rn_hat = dr.select(j == 0 | shadowed, 0, Rn_hat / j)
 
-        # factor = Rn_hat * Rn_m * Rn.W
+        factor = Rn_hat * Rn_m * Rn.W
+        # Rs.update(sampler, Rn.z, factor, active)
         Rs.merge(sampler, Rn, Rn_hat, active)
 
     def spatial_resampling(
@@ -220,9 +221,6 @@ class PathIntegrator(mi.SamplingIntegrator):
         max_iter = dr.select(R_s.M < self.M_MAX / 2, 9, 3)
 
         q = self.initial_sample
-
-        q_n = RestirSample()
-        R_n = RestirReservoir()
 
         Q = [
             mi.Vector3f(),
@@ -268,17 +266,34 @@ class PathIntegrator(mi.SamplingIntegrator):
                 RestirSample, self.initial_sample, self.to_idx(p)
             )
 
-            dist = dr.dot(q_n.x_v - q.x_v, q_n.x_v - q.x_v)
+            dist = dr.norm(q_n.x_v - q.x_v)
             active = dist < self.dist_threshold | (
                 dr.dot(q_n.n_v, q.n_v) < dr.cos(self.angle_threshold)
             )
-            # active = mi.Bool(True)
 
-            R_n = dr.gather(
+            R_n: RestirReservoir = dr.gather(
                 RestirReservoir, self.temporal_reservoir, self.to_idx(p), active
             )
 
-            self.combine_reservoir(scene, R_s, R_n, q, q_n, sampler, active)
+            # self.combine_reservoir(scene, R_s, R_n, q, q_n, sampler, active)
+            q_xs = R_s.z.x_v - R_s.z.x_s
+            q_xs_len = dr.norm(q_xs)
+            cos_psi_q = dr.dot(q_xs, R_s.z.n_s)
+
+            r_xs = R_n.z.x_v - R_s.z.x_s
+            r_xs_len = dr.norm(r_xs)
+            cos_psi_r = dr.dot(r_xs, R_s.z.n_s)
+
+            div = dr.abs(cos_psi_r) * dr.sqr(r_xs_len)
+            J = dr.select(
+                div == 0, mi.Float(0), dr.abs(cos_psi_q) * dr.sqr(q_xs_len) / div
+            )
+
+            shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, R_s.z.x_v), active)
+
+            phat = dr.select(J == 0 | shadowed, 0, p_hat(R_n.z.p_q) / J)
+
+            R_s.merge(sampler, R_s, phat, active)
 
             Q_h[i] = R_n.M
             Q[i] = q_n.x_s
