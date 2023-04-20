@@ -93,9 +93,8 @@ class RestirReservoir:
 
 class PathIntegrator(mi.SamplingIntegrator):
     M_MAX = 500
-    max_r = 10
-    # dist_threshold = 0.01
-    dist_threshold = 0.1
+    max_r = 3
+    dist_threshold = 0.01
     angle_threshold = 25 * dr.pi / 180
 
     def __init__(self, props: mi.Properties):
@@ -319,7 +318,7 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
         R_s.M = dr.minimum(sum, self.M_MAX)
-        R_s.W = Z * dr.select(dr.eq(phat_val * Z, 0), 0, R_s.w / (Z * phat_val))
+        R_s.W = dr.select(dr.eq(phat_val * Z, 0), 0, R_s.w / (Z * phat_val))
         self.spatial_reservoir = R_s
 
     def temporal_resampling(
@@ -334,7 +333,6 @@ class PathIntegrator(mi.SamplingIntegrator):
         R.update(sampler, S, w)
         phat = p_hat(R.z.L_o)
         R.W = dr.select(dr.eq(phat * R.M, 0), 0, R.w / (R.M * phat))
-        print(f"{dr.count(dr.isnan(R.W))=}")
 
         self.temporal_reservoir = R
 
