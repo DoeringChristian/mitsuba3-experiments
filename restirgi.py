@@ -21,11 +21,14 @@ def p_hat(f):
 
 
 def ray_from_to(a: mi.Point3f, b: mi.Point3f) -> mi.Ray3f:
-    epsilon = dr.epsilon(mi.Point3f)
+    # epsilon = dr.epsilon(mi.Point3f)
+    epsilon = 0.0001
+    maxt = dr.norm(b - a)
+    d = (b - a) / maxt
     return mi.Ray3f(
-        a + epsilon,
-        dr.normalize(b - a),
-        maxt=dr.norm(b - a) - epsilon,
+        a + epsilon * d,
+        d,
+        maxt=maxt - epsilon * 2,
         time=0,
         wavelengths=[],
     )
@@ -220,7 +223,7 @@ class PathIntegrator(mi.SamplingIntegrator):
 
         max_iter = dr.select(R_s.M < self.M_MAX / 2, 9, 3)
 
-        q = self.initial_sample
+        q: RestirSample = self.initial_sample
 
         Q = [
             mi.Vector3f(),
@@ -276,24 +279,23 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
             # self.combine_reservoir(scene, R_s, R_n, q, q_n, sampler, active)
-            q_xs = R_s.z.x_v - R_s.z.x_s
-            q_xs_len = dr.norm(q_xs)
-            cos_psi_q = dr.dot(q_xs, R_s.z.n_s)
+            w_qq = q.x_v - q.x_s
+            w_qq_len = dr.norm(w_qq)
+            cos_psi_q = dr.dot(w_qq, q.n_s)
 
-            r_xs = R_n.z.x_v - R_s.z.x_s
-            r_xs_len = dr.norm(r_xs)
-            cos_psi_r = dr.dot(r_xs, R_s.z.n_s)
+            w_rq = R_n.z.x_v - q.x_s
+            w_rq_len = dr.norm(w_rq)
+            cos_psi_r = dr.dot(w_rq, q.n_s)
+            # print(f"{dr.any(R_s.z.x_s.x > 0.001)=}")
 
-            div = dr.abs(cos_psi_r) * dr.sqr(r_xs_len)
-            J = dr.select(
-                div == 0, mi.Float(0), dr.abs(cos_psi_q) * dr.sqr(q_xs_len) / div
-            )
+            div = dr.abs(cos_psi_q) * dr.sqr(w_rq_len)
+            J = dr.select(dr.eq(div, 0), 0, dr.abs(cos_psi_r) * dr.sqr(w_qq_len) / div)
 
-            shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, R_s.z.x_v), active)
+            shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, q.x_v), active)
 
-            phat = dr.select(J == 0 | shadowed, 0, p_hat(R_n.z.p_q) / J)
+            phat = dr.select(dr.eq(J, 0) | shadowed, 0, p_hat(R_n.z.L_o) / J)
 
-            R_s.merge(sampler, R_s, phat, active)
+            R_s.merge(sampler, R_n, phat, active)
 
             Q_h[i] = R_n.M
             Q[i] = q_n.x_s
