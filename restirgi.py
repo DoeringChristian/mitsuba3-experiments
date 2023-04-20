@@ -164,7 +164,6 @@ class PathIntegrator(mi.SamplingIntegrator):
         assert self.film_size is not None
         R = self.spatial_reservoir
         S = R.z
-        wi = dr.normalize(S.x_s - S.x_v)
         spatial = S.f * S.L_o * R.W + self.emittance
 
         R = self.temporal_reservoir
@@ -273,6 +272,7 @@ class PathIntegrator(mi.SamplingIntegrator):
             active = dist < self.dist_threshold | (
                 dr.dot(q_n.n_v, q.n_v) < dr.cos(self.angle_threshold)
             )
+            active &= i < max_iter
 
             R_n: RestirReservoir = dr.gather(
                 RestirReservoir, self.temporal_reservoir, self.to_idx(p), active
@@ -305,10 +305,12 @@ class PathIntegrator(mi.SamplingIntegrator):
         phat_val = p_hat(R_s.z.L_o)
         for i in range(len(Q)):
             shadowed = scene.ray_test(ray_from_to(R_s.z.x_v, Q[i]))
-            Z += dr.select(~shadowed & (phat_val > 0.0) & Q_active[i], Q_h[i], 0)
+            Z += dr.select(
+                ~shadowed & (phat_val > 0.0) & Q_active[i] & (i < max_iter), Q_h[i], 0
+            )
 
         R_s.M = dr.minimum(sum, self.M_MAX)
-        R_s.W = Z * dr.select(phat_val == 0, 0, R_s.w / (Z * phat_val))
+        R_s.W = Z * dr.select(dr.eq(phat_val * Z, 0), 0, R_s.w / (Z * phat_val))
         self.spatial_reservoir = R_s
 
     def temporal_resampling(
