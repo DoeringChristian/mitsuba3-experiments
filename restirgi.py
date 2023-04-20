@@ -153,6 +153,8 @@ class PathIntegrator(mi.SamplingIntegrator):
         dr.schedule(imgs)
         dr.eval()
 
+        self.n += 1
+
         return imgs
 
     def render_final(self) -> tuple[mi.TensorXf, mi.TensorXf, mi.TensorXf]:
@@ -164,11 +166,10 @@ class PathIntegrator(mi.SamplingIntegrator):
 
         R = self.temporal_reservoir
         S = R.z
-        wi = dr.normalize(S.x_s - S.x_v)
         temporal = S.f * S.L_o * R.W + self.emittance
 
         S = self.initial_sample
-        initial = S.f * S.L_o + self.emittance
+        initial = S.f / S.p_q * S.L_o + self.emittance
 
         return (
             mi.TensorXf(
@@ -335,23 +336,25 @@ class PathIntegrator(mi.SamplingIntegrator):
         )
 
         S.p_q = bsdf_sample.pdf
-        S.f = bsdf_weight
+
+        bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
+        S.f = bsdf_weight * bsdf_sample.pdf
 
         ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
+
+        S.L_o = self.sample_ray(scene, sampler, ray)
+
         si: mi.SurfaceInteraction3f = scene.ray_intersect(ray)
 
         S.x_s = si.p
         S.n_s = si.n
 
-        S.L_o = self.sample_outgoing(scene, sampler, si, ray)
-
         self.initial_sample = S
 
-    def sample_outgoing(
+    def sample_ray(
         self,
         scene: mi.Scene,
         sampler: mi.Sampler,
-        si: mi.SurfaceInteraction3f,
         ray: mi.Ray3f,
         active: bool = True,
     ) -> mi.Color3f:
@@ -500,7 +503,7 @@ if __name__ == "__main__":
 
         img_acc = None
 
-        for i in range(100):
+        for i in range(10):
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
