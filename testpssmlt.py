@@ -27,7 +27,7 @@ scene = mi.load_dict(scene)
 
 
 def render_pssmlt(n=100, seed=0):
-    integrator = mi.load_dict(
+    integrator: pssmltsimple.Pssmlt = mi.load_dict(
         {
             "type": "pssmlt_simple",
             "max_depth": 8,
@@ -39,7 +39,8 @@ def render_pssmlt(n=100, seed=0):
     j = 1
     for i in range(n):
         print(f"{i=}")
-        nimg = mi.render(scene, integrator=integrator, seed=i + seed * n, spp=1)
+        # nimg = mi.render(scene, integrator=integrator, seed=i + seed * n, spp=1)
+        nimg = integrator.render(scene, scene.sensors()[0], seed=i + seed * n, spp=1)
         if i < mlt_depth:
             img = nimg
         else:

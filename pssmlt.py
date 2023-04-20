@@ -104,20 +104,48 @@ class Pssmlt(mi.SamplingIntegrator):
     def reset(self):
         self.sample_count = 0
 
-    def sample(
+    def render(
         self,
         scene: mi.Scene,
-        sampler: mi.Sampler,
-        ray: mi.RayDifferential3f,
-        medium: mi.Medium = None,
-        active: bool = True,
-    ):
+        sensor: mi.Sensor,
+        seed: int = 0,
+        spp: int = 1,
+        develop: bool = True,
+        evaluate: bool = True,
+    ) -> mi.TensorXf:
+        film = sensor.film()
+
+        film_size = film.crop_size()
+
+        # if self.film_size is None:
+        #     self.film_size = film_size
+
+        wavefront_size = film_size.x * film_size.y * spp
+        print(f"{wavefront_size=}")
+
+        sampler = sensor.sampler()
+        sampler.set_sample_count(spp)
+        sampler.set_samples_per_wavefront(spp)
+        sampler.seed(seed, wavefront_size)
+
+        idx = dr.arange(mi.UInt, wavefront_size)
+
+        pos = mi.Vector2u()
+        pos.y = idx // film_size.x
+        pos.x = dr.fma(-film_size.x, pos.y, idx)
+
+        # sample_pos = (mi.Point2f(pos) + sampler.next_2d()) / mi.Point2f(
+        #     film.crop_size()
+        # )
+        sample_pos = (mi.Point2f(pos) + mi.Point2f(0.5)) / mi.Point2f(film.crop_size())
+        ray, ray_weight = sensor.sample_ray(0.0, 0.0, sample_pos, mi.Point2f(0.5))
+
         if self.sample_count == 0:
             self.wo = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
             self.L = mi.Color3f(0)
             self.cumulative_weight = mi.Float32(0.0)
 
-        L, path, valid = self.sample_rest(scene, sampler, ray, medium, active)
+        L, path, valid = self.sample_rest(scene, sampler, ray)
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
 
@@ -136,7 +164,10 @@ class Pssmlt(mi.SamplingIntegrator):
         dr.eval()
 
         self.sample_count += 1
-        return self.L / self.cumulative_weight, valid, []
+        return mi.TensorXf(
+            dr.ravel(self.L / self.cumulative_weight),
+            shape=[film_size.x, film_size.y, 3],
+        )
 
     def sample_rest(
         self,
