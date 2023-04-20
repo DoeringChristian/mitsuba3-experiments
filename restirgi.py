@@ -43,6 +43,7 @@ class RestirSample:
     L_o: mi.Color3f
     p_q: mi.Float
     f: mi.Color3f
+    valid: mi.Bool
 
     DRJIT_STRUCT = {
         "x_v": mi.Vector3f,
@@ -52,6 +53,7 @@ class RestirSample:
         "L_o": mi.Color3f,
         "p_q": mi.Float,
         "f": mi.Color3f,
+        "valid": mi.Bool,
     }
 
 
@@ -92,7 +94,8 @@ class RestirReservoir:
 class PathIntegrator(mi.SamplingIntegrator):
     M_MAX = 500
     max_r = 10
-    dist_threshold = 0.01
+    # dist_threshold = 0.01
+    dist_threshold = 0.1
     angle_threshold = 25 * dr.pi / 180
 
     def __init__(self, props: mi.Properties):
@@ -269,9 +272,10 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
             dist = dr.norm(q_n.x_v - q.x_v)
-            active = dist < self.dist_threshold | (
-                dr.dot(q_n.n_v, q.n_v) < dr.cos(self.angle_threshold)
+            active = dist < self.dist_threshold & (
+                dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
             )
+            active = dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
             active &= i < max_iter
 
             R_n: RestirReservoir = dr.gather(
@@ -281,19 +285,24 @@ class PathIntegrator(mi.SamplingIntegrator):
             # self.combine_reservoir(scene, R_s, R_n, q, q_n, sampler, active)
             w_qq = q.x_v - q.x_s
             w_qq_len = dr.norm(w_qq)
+            active &= w_qq_len > 0.0
+            w_qq /= w_qq_len
             cos_psi_q = dr.dot(w_qq, q.n_s)
 
             w_rq = R_n.z.x_v - q.x_s
             w_rq_len = dr.norm(w_rq)
+            active &= w_qq_len > 0.0
+            w_rq /= w_qq_len
             cos_psi_r = dr.dot(w_rq, q.n_s)
-            # print(f"{dr.any(R_s.z.x_s.x > 0.001)=}")
 
             div = dr.abs(cos_psi_q) * dr.sqr(w_rq_len)
             J = dr.select(dr.eq(div, 0), 0, dr.abs(cos_psi_r) * dr.sqr(w_qq_len) / div)
 
             shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, q.x_v), active)
 
-            phat = dr.select(dr.eq(J, 0) | shadowed, 0, p_hat(R_n.z.L_o) / J)
+            phat = dr.select(
+                ~active | dr.eq(J, 0.0) | shadowed, 0, p_hat(R_n.z.L_o) / J
+            )
 
             R_s.merge(sampler, R_n, phat, active)
 
@@ -304,7 +313,7 @@ class PathIntegrator(mi.SamplingIntegrator):
 
         phat_val = p_hat(R_s.z.L_o)
         for i in range(len(Q)):
-            shadowed = scene.ray_test(ray_from_to(R_s.z.x_v, Q[i]))
+            shadowed = scene.ray_test(ray_from_to(R_s.z.x_v, Q[i]), Q_active[i])
             Z += dr.select(
                 ~shadowed & (phat_val > 0.0) & Q_active[i] & (i < max_iter), Q_h[i], 0
             )
@@ -321,10 +330,11 @@ class PathIntegrator(mi.SamplingIntegrator):
         S = self.initial_sample
         R = self.temporal_reservoir
 
-        w = p_hat(S.L_o) / S.p_q
+        w = dr.select(dr.eq(S.p_q, 0), 0, p_hat(S.L_o) / S.p_q)
         R.update(sampler, S, w)
         phat = p_hat(R.z.L_o)
-        R.W = dr.select(phat == 0, 0, R.w / (R.M * phat))
+        R.W = dr.select(dr.eq(phat * R.M, 0), 0, R.w / (R.M * phat))
+        print(f"{dr.count(dr.isnan(R.W))=}")
 
         self.temporal_reservoir = R
 
@@ -349,6 +359,7 @@ class PathIntegrator(mi.SamplingIntegrator):
 
         S.x_v = si.p
         S.n_v = si.n
+        S.valid = si.is_valid()
 
         bsdf_sample, bsdf_weight = bsdf.sample(
             mi.BSDFContext(), si, sampler.next_1d(), sampler.next_2d()
