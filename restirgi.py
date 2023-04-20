@@ -93,7 +93,7 @@ class RestirReservoir:
 
 class PathIntegrator(mi.SamplingIntegrator):
     M_MAX = 500
-    max_r = 10
+    max_r = 100
     dist_threshold = 0.01
     angle_threshold = 25 * dr.pi / 180
 
@@ -167,7 +167,6 @@ class PathIntegrator(mi.SamplingIntegrator):
         R = self.spatial_reservoir
         S = R.z
         spatial = S.f * S.L_o * R.W + self.emittance
-        # spatial = mi.Color3f(dr.select(R.M > 100, 1, 0), 0.0, 0.0)
 
         R = self.temporal_reservoir
         S = R.z
@@ -269,9 +268,9 @@ class PathIntegrator(mi.SamplingIntegrator):
             active &= cos_psi_r > 0.1
             active &= w_rq_len > 0.001
 
-            div = dr.abs(cos_psi_q) * dr.sqr(w_rq_len)
+            div = dr.abs(cos_psi_r) * dr.sqr(w_qq_len)
             J_rcp = dr.select(
-                dr.eq(div, 0), 0, dr.abs(cos_psi_r) * dr.sqr(w_qq_len) / div
+                dr.eq(div, 0), 0, dr.abs(cos_psi_q) * dr.sqr(w_rq_len) / div
             )
 
             shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, q.x_v), active)
