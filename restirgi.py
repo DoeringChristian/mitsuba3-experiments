@@ -93,7 +93,7 @@ class RestirReservoir:
 
 class PathIntegrator(mi.SamplingIntegrator):
     M_MAX = 500
-    max_r = 3
+    max_r = 10
     dist_threshold = 0.01
     angle_threshold = 25 * dr.pi / 180
 
@@ -167,6 +167,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         R = self.spatial_reservoir
         S = R.z
         spatial = S.f * S.L_o * R.W + self.emittance
+        # spatial = mi.Color3f(dr.select(R.M > 100, 1, 0), 0.0, 0.0)
 
         R = self.temporal_reservoir
         S = R.z
@@ -186,36 +187,6 @@ class PathIntegrator(mi.SamplingIntegrator):
                 dr.ravel(spatial), shape=[self.film_size.x, self.film_size.y, 3]
             ),
         )
-
-    def combine_reservoir(
-        self,
-        scene: mi.Scene,
-        Rs: RestirReservoir,
-        Rn: RestirReservoir,
-        q: RestirSample,
-        q_n: RestirSample,
-        sampler: mi.Sampler,
-        active: mi.Bool,
-    ):
-        Rn_m = dr.minimum(Rn.M, self.M_MAX)
-        Rn_hat = p_hat(Rn.z.L_o)
-        shadowed = scene.ray_test(ray_from_to(q.x_v, Rn.z.x_s))
-
-        w_qq = q.x_v - q.x_s
-        w_qq_len = dr.norm(w_qq)
-        w_qq /= w_qq_len
-        w_rq = Rn.z.x_v - q.x_s
-        w_rq_len = dr.norm(w_rq)
-        w_rq /= w_rq_len
-        qq = w_qq_len * w_qq_len
-        rq = w_rq_len * w_rq_len
-        div = rq * dr.abs(dr.dot(w_qq, q.n_s))
-        j = dr.select(div == 0, 0, dr.abs(dr.dot(w_rq, q.n_s)) * qq / div)
-        Rn_hat = dr.select(j == 0 | shadowed, 0, Rn_hat / j)
-
-        factor = Rn_hat * Rn_m * Rn.W
-        # Rs.update(sampler, Rn.z, factor, active)
-        Rs.merge(sampler, Rn, Rn_hat, active)
 
     def spatial_resampling(
         self, scene: mi.Scene, sampler: mi.Sampler, pos: mi.Vector2u
@@ -284,24 +255,28 @@ class PathIntegrator(mi.SamplingIntegrator):
             # self.combine_reservoir(scene, R_s, R_n, q, q_n, sampler, active)
             w_qq = q.x_v - q.x_s
             w_qq_len = dr.norm(w_qq)
-            active &= w_qq_len > 0.0
             w_qq /= w_qq_len
             cos_psi_q = dr.dot(w_qq, q.n_s)
 
+            active &= cos_psi_q > 0.1
+            active &= w_qq_len > 0.001
+
             w_rq = R_n.z.x_v - q.x_s
             w_rq_len = dr.norm(w_rq)
-            active &= w_qq_len > 0.0
-            w_rq /= w_qq_len
+            w_rq /= w_rq_len
             cos_psi_r = dr.dot(w_rq, q.n_s)
 
+            active &= cos_psi_r > 0.1
+            active &= w_rq_len > 0.001
+
             div = dr.abs(cos_psi_q) * dr.sqr(w_rq_len)
-            J = dr.select(dr.eq(div, 0), 0, dr.abs(cos_psi_r) * dr.sqr(w_qq_len) / div)
+            J_rcp = dr.select(
+                dr.eq(div, 0), 0, dr.abs(cos_psi_r) * dr.sqr(w_qq_len) / div
+            )
 
             shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, q.x_v), active)
 
-            phat = dr.select(
-                ~active | dr.eq(J, 0.0) | shadowed, 0, p_hat(R_n.z.L_o) / J
-            )
+            phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o) * J_rcp)
 
             R_s.merge(sampler, R_n, phat, active)
 
