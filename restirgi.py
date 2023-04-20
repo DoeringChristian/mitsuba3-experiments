@@ -93,7 +93,7 @@ class RestirReservoir:
 
 class PathIntegrator(mi.SamplingIntegrator):
     M_MAX = 500
-    max_r = 100
+    max_r = 10
     dist_threshold = 0.01
     angle_threshold = 25 * dr.pi / 180
 
@@ -241,10 +241,8 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
             dist = dr.norm(q_n.x_v - q.x_v)
-            active = dist < self.dist_threshold & (
-                dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
-            )
-            active = dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
+            active = dist < self.dist_threshold
+            active &= dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
             active &= i < max_iter
 
             R_n: RestirReservoir = dr.gather(
@@ -257,16 +255,16 @@ class PathIntegrator(mi.SamplingIntegrator):
             w_qq /= w_qq_len
             cos_psi_q = dr.dot(w_qq, q.n_s)
 
-            active &= cos_psi_q > 0.1
-            active &= w_qq_len > 0.001
+            active &= cos_psi_q > 0.0
+            active &= w_qq_len > 0.00
 
             w_rq = R_n.z.x_v - q.x_s
             w_rq_len = dr.norm(w_rq)
             w_rq /= w_rq_len
             cos_psi_r = dr.dot(w_rq, q.n_s)
 
-            active &= cos_psi_r > 0.1
-            active &= w_rq_len > 0.001
+            active &= cos_psi_r > 0.0
+            active &= w_rq_len > 0.00
 
             div = dr.abs(cos_psi_r) * dr.sqr(w_qq_len)
             J_rcp = dr.select(
