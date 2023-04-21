@@ -251,6 +251,10 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
             def J_rcp(q: RestirSample, r: RestirSample) -> mi.Float:
+                """
+                Calculate the Reciprocal of the absolute of the Jacobian determinant.
+                J_rcp = |J_{q\\rightarrow r}|^{-1} // Equation 11 from paper
+                """
                 w_qq = q.x_v - q.x_s
                 w_qq_len = dr.norm(w_qq)
                 w_qq /= w_qq_len
