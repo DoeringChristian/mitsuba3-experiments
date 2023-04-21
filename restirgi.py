@@ -241,7 +241,8 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
             dist = dr.norm(q_n.x_v - q.x_v)
-            active = dist < self.dist_threshold
+            # active = dist < self.dist_threshold
+            active = mi.Bool(True)
             active &= dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
             active &= i < max_iter
 
@@ -249,31 +250,25 @@ class PathIntegrator(mi.SamplingIntegrator):
                 RestirReservoir, self.temporal_reservoir, self.to_idx(p), active
             )
 
-            # self.combine_reservoir(scene, R_s, R_n, q, q_n, sampler, active)
-            w_qq = q.x_v - q.x_s
-            w_qq_len = dr.norm(w_qq)
-            w_qq /= w_qq_len
-            cos_psi_q = dr.dot(w_qq, q.n_s)
+            def J_rcp(q: RestirSample, r: RestirSample) -> mi.Float:
+                w_qq = q.x_v - q.x_s
+                w_qq_len = dr.norm(w_qq)
+                w_qq /= w_qq_len
+                cos_psi_q = dr.dot(w_qq, q.n_s)
 
-            active &= cos_psi_q > 0.0
-            active &= w_qq_len > 0.00
+                w_rq = r.x_v - q.x_s
+                w_rq_len = dr.norm(w_rq)
+                w_rq /= w_rq_len
+                cos_psi_r = dr.dot(w_rq, q.n_s)
 
-            w_rq = R_n.z.x_v - q.x_s
-            w_rq_len = dr.norm(w_rq)
-            w_rq /= w_rq_len
-            cos_psi_r = dr.dot(w_rq, q.n_s)
-
-            active &= cos_psi_r > 0.0
-            active &= w_rq_len > 0.00
-
-            div = dr.abs(cos_psi_r) * dr.sqr(w_qq_len)
-            J_rcp = dr.select(
-                dr.eq(div, 0), 0, dr.abs(cos_psi_q) * dr.sqr(w_rq_len) / div
-            )
+                div = dr.abs(cos_psi_r) * dr.sqr(w_qq_len)
+                return dr.select(
+                    div > 0.0, dr.abs(cos_psi_q) * dr.sqr(w_rq_len) / div, 0.0
+                )
 
             shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, q.x_v), active)
 
-            phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o) * J_rcp)
+            phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o) * J_rcp(q, R_n.z))
 
             R_s.merge(sampler, R_n, phat, active)
 
