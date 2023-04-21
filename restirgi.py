@@ -93,7 +93,7 @@ class RestirReservoir:
 
 class PathIntegrator(mi.SamplingIntegrator):
     M_MAX = 500
-    max_r = 10
+    max_r = 100
     dist_threshold = 0.01
     angle_threshold = 25 * dr.pi / 180
 
@@ -272,7 +272,8 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, q.x_v), active)
 
-            phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o) * J_rcp(q, R_n.z))
+            # phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o) * J_rcp(q, R_n.z))
+            phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o))
 
             R_s.merge(sampler, R_n, phat, active)
 
@@ -502,7 +503,7 @@ if __name__ == "__main__":
 
         img_acc = None
 
-        for i in range(10):
+        for i in range(50):
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
