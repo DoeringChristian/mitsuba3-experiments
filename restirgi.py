@@ -138,6 +138,10 @@ class PathIntegrator(mi.SamplingIntegrator):
         pos.y = idx // film_size.x
         pos.x = dr.fma(-film_size.x, pos.y, idx)
 
+        sample_pos = (mi.Point2f(pos) + sampler.next_2d()) / mi.Point2f(
+            film.crop_size()
+        )
+
         if self.n == 0:
             self.temporal_reservoir: RestirReservoir = dr.zeros(
                 RestirReservoir, wavefront_size
@@ -146,7 +150,7 @@ class PathIntegrator(mi.SamplingIntegrator):
                 RestirReservoir, wavefront_size
             )
 
-        self.sample_initial(scene, sampler, sensor, pos)
+        self.sample_initial(scene, sampler, sensor, sample_pos)
         dr.schedule(self.initial_sample)
         dr.eval()
         self.temporal_resampling(sampler, idx)
@@ -154,15 +158,33 @@ class PathIntegrator(mi.SamplingIntegrator):
         dr.eval()
         self.spatial_resampling(scene, sampler, pos)
         dr.schedule(self.spatial_reservoir)
-        imgs = self.render_final()
-        dr.schedule(imgs)
+        results = self.render_final()
+        dr.schedule(results)
         dr.eval()
+
+        imgs = []
+        for res in results:
+            film.prepare(self.aov_names())
+
+            block: mi.ImageBlock = film.create_block()
+
+            aovs = [res.x, res.y, res.z, mi.Float(1.0)]
+
+            block.put(pos, aovs)
+
+            film.put_block(block)
+
+            img = film.develop()
+            dr.schedule(img)
+            dr.eval()
+
+            imgs.append(img)
 
         self.n += 1
 
         return imgs
 
-    def render_final(self) -> tuple[mi.TensorXf, mi.TensorXf, mi.TensorXf]:
+    def render_final(self) -> tuple[mi.Color3f, mi.Color3f, mi.Color3f]:
         assert self.film_size is not None
         R = self.spatial_reservoir
         S = R.z
@@ -175,6 +197,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         S = self.initial_sample
         initial = S.f / S.p_q * S.L_o + self.emittance
 
+        return initial, temporal, spatial
         return (
             mi.TensorXf(
                 dr.ravel(initial), shape=[self.film_size.x, self.film_size.y, 3]
@@ -309,15 +332,16 @@ class PathIntegrator(mi.SamplingIntegrator):
         self.temporal_reservoir = R
 
     def sample_initial(
-        self, scene: mi.Scene, sampler: mi.Sampler, sensor: mi.Sensor, pos: mi.Vector2u
+        self,
+        scene: mi.Scene,
+        sampler: mi.Sampler,
+        sensor: mi.Sensor,
+        # pos: mi.Vector2u,
+        sample_pos: mi.Point2f,
     ) -> RestirSample:
         film = sensor.film()
 
         S = RestirSample()
-
-        sample_pos = (mi.Point2f(pos) + sampler.next_2d()) / mi.Point2f(
-            film.crop_size()
-        )
         ray, ray_weight = sensor.sample_ray(0.0, 0.0, sample_pos, mi.Point2f(0.5))
 
         si: mi.SurfaceInteraction3f = scene.ray_intersect(ray)
