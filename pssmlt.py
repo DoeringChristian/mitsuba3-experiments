@@ -187,10 +187,6 @@ class Pssmlt(mi.SamplingIntegrator):
         dr.eval()
 
         self.sample_count += 1
-        # return mi.TensorXf(
-        #     dr.ravel(self.L / self.cumulative_weight),
-        #     shape=[film_size.x, film_size.y, 3],
-        # )
         return img
 
     def sample_rest(
