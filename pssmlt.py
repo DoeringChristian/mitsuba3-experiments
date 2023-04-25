@@ -159,19 +159,18 @@ class Pssmlt(mi.SamplingIntegrator):
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
 
+        accept = u < a
         proposed_weight = a
         current_weight = 1.0 - a
         self.cumulative_weight = dr.select(
-            u < a, proposed_weight, self.cumulative_weight + current_weight
+            accept, proposed_weight, self.cumulative_weight + current_weight
         )
 
         self.offset = dr.select(u < a, offset, self.offset)
 
-        self.L = dr.select(u < a, L, self.L)
-        u = dr.tile(u, self.max_depth)
-        a = dr.tile(a, self.max_depth)
-        self.path.vertices = dr.select(u < a, path.vertices, self.path.vertices)
-        # self.wo.vertices = dr.select(u < a, path.vertices, self.wo.vertices)
+        self.L = dr.select(accept, L, self.L)
+        accept = dr.tile(accept, self.max_depth)
+        self.path.vertices = dr.select(accept, path.vertices, self.path.vertices)
 
         res = self.L / self.cumulative_weight
         film.prepare(self.aov_names())
@@ -202,7 +201,7 @@ class Pssmlt(mi.SamplingIntegrator):
         wavefront_size: int,
         medium: mi.Medium = None,
         active: bool = True,
-    ) -> mi.Color3f:
+    ) -> tuple[mi.Color3f, Path]:
         ...
 
     def init_path(self, wavefront_size):
