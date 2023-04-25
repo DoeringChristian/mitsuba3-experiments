@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
 mi.set_variant("cuda_ad_rgb")
+dr.set_log_level(dr.LogLevel.Trace)
 import pssmltpath
 import pssmltsimple
 import simple

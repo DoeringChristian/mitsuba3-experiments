@@ -132,10 +132,15 @@ class Pssmlt(mi.SamplingIntegrator):
         if self.sample_count == 0:
             # self.init_path()
             self.path = Path(self.path_type, wavefront_size, self.max_depth)
+            self.proposed = Path(self.path_type, wavefront_size, self.max_depth)
             # self.wo = Path(wavefront_size, self.max_depth, dtype=mi.Vector3f)
             self.L = mi.Color3f(0)
             self.cumulative_weight = mi.Float32(0.0)
             self.offset = mi.Vector2f(0.5)
+
+        # dr.schedule(self.L)
+        # dr.schedule(self.path.vertices)
+        dr.eval()
 
         sampler = sensor.sampler()
         sampler.set_sample_count(spp)
@@ -153,9 +158,10 @@ class Pssmlt(mi.SamplingIntegrator):
         sample_pos = (mi.Point2f(pos) + offset) / mi.Point2f(film.crop_size())
         ray, ray_weight = sensor.sample_ray(0.0, 0.0, sample_pos, mi.Point2f(0.5))
 
-        L, path = self.sample_rest(
-            scene, sampler, ray, self.sample_count == 0, wavefront_size
+        L = self.sample_rest(
+            scene, sampler, ray, self.proposed, self.sample_count == 0, wavefront_size
         )
+        dr.eval(L, self.proposed.vertices)
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
 
@@ -170,7 +176,9 @@ class Pssmlt(mi.SamplingIntegrator):
 
         self.L = dr.select(accept, L, self.L)
         accept = dr.tile(accept, self.max_depth)
-        self.path.vertices = dr.select(accept, path.vertices, self.path.vertices)
+        self.path.vertices = dr.select(
+            accept, self.proposed.vertices, self.path.vertices
+        )
 
         res = self.L / self.cumulative_weight
         film.prepare(self.aov_names())
@@ -182,8 +190,6 @@ class Pssmlt(mi.SamplingIntegrator):
 
         img = film.develop()
         dr.schedule(img)
-        dr.schedule(self.L)
-        dr.schedule(self.path.vertices)
         dr.eval()
 
         self.sample_count += 1

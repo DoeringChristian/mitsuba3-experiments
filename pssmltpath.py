@@ -19,6 +19,7 @@ class PssmltPath(Pssmlt):
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
+        path: Path,
         initialize: bool,
         wavefront_size: int,
         medium: mi.Medium = None,
@@ -26,7 +27,7 @@ class PssmltPath(Pssmlt):
     ) -> mi.Color3f:
         # if initialize:
         #     self.emitter_offset = Path(wavefront_size, self.max_depth, mi.Vector2f)
-        path = Path(PathVert, len(ray.d.x), self.max_depth)
+        # path = Path(PathVert, len(ray.d.x), self.max_depth)
 
         ray = mi.Ray3f(ray)
         active = mi.Bool(active)
@@ -164,7 +165,7 @@ class PssmltPath(Pssmlt):
                 active_next & (~rr_active | rr_continue) & (dr.neq(throughput_max, 0.0))
             )
 
-        return L, path
+        return L
 
     def mutate(self, old: PathVert, wo: mi.Vector3f, sample1: mi.Point2f) -> PathVert:
         vert = PathVert()
