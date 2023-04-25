@@ -99,11 +99,16 @@ class PssmltPath(Pssmlt):
                 bsdf_ctx, si, sampler.next_1d(), sampler.next_2d()
             )
 
-            bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
-
             vert: PathVert = self.mutate(
                 self.path[depth], bsdf_sample.wo, sampler.next_2d()
             )
+
+            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, vert.wo, active)
+
+            vert.wo[bsdf_pdf <= 0.0] = bsdf_sample.wo
+            bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / bsdf_pdf
+
+            bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
 
             ray = si.spawn_ray(si.to_world(vert.wo))
 
