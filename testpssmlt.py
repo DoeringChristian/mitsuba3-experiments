@@ -17,10 +17,10 @@ scene["sphere"] = {
     "to_world": mi.ScalarTransform4f.translate([0.335, -0.7, 0.38]).scale(0.3),
     "bsdf": {"type": "dielectric"},
 }
-scene["blocking"] = {
-    "type": "cube",
-    "to_world": mi.ScalarTransform4f.translate([0.0, 0.4, 0.0]).scale(0.3),
-}
+# scene["blocking"] = {
+#     "type": "cube",
+#     "to_world": mi.ScalarTransform4f.translate([0.0, 0.4, 0.0]).scale(0.3),
+# }
 del scene["small-box"]
 print(f"{scene=}")
 scene = mi.load_dict(scene)
@@ -35,33 +35,38 @@ def render_pssmlt(n=100, seed=0):
         }
     )
     img = None
-    mlt_depth = 50
-    j = 1
     for i in range(n):
         print(f"{i=}")
         # nimg = mi.render(scene, integrator=integrator, seed=i + seed * n, spp=1)
         nimg = integrator.render(scene, scene.sensors()[0], seed=i + seed * n, spp=1)
-        if i < mlt_depth:
+        if img is None:
             img = nimg
         else:
-            img = img * mi.Float((j - 1) / j) + nimg / mi.Float(j)
-            j += 1
-        # mi.util.write_bitmap(f"out/i{i}.png", img, write_async=False)
+            img = img * mi.Float((i) / (i + 1)) + nimg / mi.Float(i + 1)
+        mi.util.write_bitmap(f"out/j{seed}i{i}.png", img, write_async=False)
     return img
 
 
 img = None
-j = 1
 with dr.suspend_grad():
-    for i in range(10):
-        nimg = render_pssmlt(seed=i)
+    for j in range(1):
+        nimg = render_pssmlt(seed=j, n=100)
 
         if img is None:
             img = nimg
         else:
-            img = img * mi.Float((j - 1) / j) + nimg / mi.Float(j)
-            j += 1
-        mi.util.write_bitmap(f"out/j{i}.png", img, write_async=False)
+            img = img * mi.Float((j) / (j + 1)) + nimg / mi.Float(j + 1)
+        mi.util.write_bitmap(f"out/j{j}.png", img, write_async=False)
 
-plt.imshow(mi.util.convert_to_bitmap(img))
+    ref_integrator = mi.load_dict(
+        {
+            "type": "path",
+        }
+    )
+    ref = mi.render(scene, integrator=ref_integrator, spp=128)
+
+fig, axs = plt.subplots(2, 2, figsize=(10, 10))
+axs[0][0].imshow(mi.util.convert_to_bitmap(img))
+axs[0][1].imshow(mi.util.convert_to_bitmap(ref))
+# plt.imshow(mi.util.convert_to_bitmap(img))
 plt.show()
