@@ -169,7 +169,7 @@ class PssmltPath(Pssmlt):
 
     def mutate(self, old: PathVert, wo: mi.Vector3f, sample1: mi.Point2f) -> PathVert:
         vert = PathVert()
-        vert.wo = dr.normalize(old.wo + wo)
+        vert.wo = dr.normalize(old.wo + wo * 1.0)
         vert.emitter_sample = dr.clamp(
             mi.warp.square_to_std_normal(sample1) * 0.2 + old.emitter_sample, 0.0, 1.0
         )
