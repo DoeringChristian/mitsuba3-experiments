@@ -12,9 +12,13 @@ class PssmltPath(Pssmlt):
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
+        initialize: bool,
+        wavefront_size: int,
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:
+        if initialize:
+            self.emitter_offset = Path(wavefront_size, self.max_depth, mi.Vector2f)
         path_wo = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
 
         # --------------------- Configure loop state ----------------------
@@ -101,9 +105,10 @@ class PssmltPath(Pssmlt):
             bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
 
             # Pssmlt adjusting
-            wo = bsdf_sample.wo
-            wo += self.wo[depth]
-            wo = dr.normalize(wo)
+            wo = self.mutate_3d(self.wo[depth], bsdf_sample.wo)
+            # wo = bsdf_sample.wo
+            # wo += self.wo[depth]
+            # wo = dr.normalize(wo)
 
             # Reevaluate bsdf_weight after mutating wo
             bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)

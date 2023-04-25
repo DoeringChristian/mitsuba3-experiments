@@ -12,6 +12,8 @@ class PssmltSimple(Pssmlt):
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
+        initialize: bool,
+        wavefront_size: int,
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:

@@ -150,7 +150,9 @@ class Pssmlt(mi.SamplingIntegrator):
         sample_pos = (mi.Point2f(pos) + offset) / mi.Point2f(film.crop_size())
         ray, ray_weight = sensor.sample_ray(0.0, 0.0, sample_pos, mi.Point2f(0.5))
 
-        L, path, valid = self.sample_rest(scene, sampler, ray)
+        L, path, valid = self.sample_rest(
+            scene, sampler, ray, self.sample_count == 0, wavefront_size
+        )
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
 
@@ -193,6 +195,8 @@ class Pssmlt(mi.SamplingIntegrator):
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
+        initialize: bool,
+        wavefront_size: int,
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:
