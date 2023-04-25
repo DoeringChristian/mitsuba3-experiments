@@ -24,23 +24,21 @@ def drjitstruct(cls):
     return cls
 
 
-# class PathVert:
-#     ...
-
-
 class Path:
-    idx: mi.UInt32
-
     def __init__(self, dtype, wavefront_size: int, max_depth: int):
         self.wavefront_size = wavefront_size
         self.max_depth = max_depth
-        self.idx = dr.arange(mi.UInt32, wavefront_size)
+        # self.idx = dr.arange(mi.UInt32, wavefront_size)
         self.dtype = dtype
 
         self.vertices = dr.zeros(dtype, shape=(self.max_depth * self.wavefront_size))
 
     def __setitem__(self, depth: mi.UInt32, value):
-        dr.scatter(self.vertices, value, depth * self.wavefront_size + self.idx)
+        dr.scatter(
+            self.vertices,
+            value,
+            depth * self.wavefront_size + dr.arange(mi.UInt32, self.wavefront_size),
+        )
 
     # Return vertex at depth
     @overload
@@ -55,7 +53,9 @@ class Path:
     def __getitem__(self, idx):
         if isinstance(idx, mi.UInt32):
             return dr.gather(
-                self.dtype, self.vertices, idx * self.wavefront_size + self.idx
+                self.dtype,
+                self.vertices,
+                idx * self.wavefront_size + dr.arange(mi.UInt32, self.wavefront_size),
             )
         if (
             isinstance(idx, tuple)
@@ -98,14 +98,12 @@ class Pssmlt(mi.SamplingIntegrator):
     L: mi.Color3f
     offset: mi.Vector2f
     sample_count = 0
-    nee = True
     cumulative_weight: mi.Float32
     path_type: ...
 
     def __init__(self, props: mi.Properties) -> None:
         self.max_depth = props.get("max_depth", def_value=16)
         self.rr_depth = props.get("rr_depth", def_value=4)
-        self.nee = props.get("nee", def_value=True)
         super().__init__(props)
 
     def reset(self):
@@ -131,16 +129,11 @@ class Pssmlt(mi.SamplingIntegrator):
         print(f"{wavefront_size=}")
 
         if self.sample_count == 0:
-            # self.init_path()
             self.path = Path(self.path_type, wavefront_size, self.max_depth)
             self.proposed = Path(self.path_type, wavefront_size, self.max_depth)
-            # self.wo = Path(wavefront_size, self.max_depth, dtype=mi.Vector3f)
             self.L = mi.Color3f(0)
             self.cumulative_weight = mi.Float32(0.0)
             self.offset = mi.Vector2f(0.5)
-
-        # dr.schedule(self.L)
-        # dr.schedule(self.path.vertices)
 
         sampler = sensor.sampler()
         sampler.set_sample_count(spp)
@@ -163,29 +156,33 @@ class Pssmlt(mi.SamplingIntegrator):
             scene, sampler, ray, self.proposed, self.sample_count == 0, wavefront_size
         )
         dr.schedule(self.proposed.vertices)
-        # dr.eval(L, self.proposed.vertices)
-        # dr.eval(self.proposed.vertices)
+
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
 
         accept = u < a
         proposed_weight = a
         current_weight = 1.0 - a
-        self.cumulative_weight = dr.select(
-            accept, proposed_weight, self.cumulative_weight + current_weight
-        )
+        # self.cumulative_weight = dr.select(
+        #     accept, proposed_weight, self.cumulative_weight + current_weight
+        # )
+        self.cumulative_weight[accept] = proposed_weight
+        self.cumulative_weight[~accept] += current_weight
         dr.schedule(self.cumulative_weight)
 
-        self.offset = dr.select(u < a, offset, self.offset)
+        # self.offset = dr.select(u < a, offset, self.offset)
+        self.offset[accept] = offset
         dr.schedule(self.offset)
 
-        self.L = dr.select(accept, L, self.L)
+        # self.L = dr.select(accept, L, self.L)
+        self.L[accept] = L
         dr.schedule(self.L)
 
         accept = dr.tile(accept, self.max_depth)
         self.path.vertices = dr.select(
             accept, self.proposed.vertices, self.path.vertices
         )
+        # self.path.vertices[accept] = self.proposed.vertices
         dr.schedule(self.path.vertices)
 
         res = self.L / self.cumulative_weight

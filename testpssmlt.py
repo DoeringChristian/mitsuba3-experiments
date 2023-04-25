@@ -1,3 +1,4 @@
+import gc
 from typing import overload
 import mitsuba as mi
 import drjit as dr
@@ -42,7 +43,7 @@ if __name__ == "__main__":
             print(f"{i=}")
             # nimg = mi.render(scene, integrator=integrator, seed=i + seed * n, spp=1)
             nimg = integrator.render(
-                scene, scene.sensors()[0], seed=i + seed * n, spp=2
+                scene, scene.sensors()[0], seed=i + seed * n, spp=4
             )
             if img is None or i < mlt_burnin:
                 img = nimg
@@ -51,10 +52,24 @@ if __name__ == "__main__":
                     (i - mlt_burnin) / (i - mlt_burnin + 1)
                 ) + nimg / mi.Float(i - mlt_burnin + 1)
             mi.util.write_bitmap(f"out/j{seed}i{i}.png", img, write_async=False)
+            del nimg
+        del integrator
+        gc.collect()
+        dr.flush_malloc_cache()
         return img
 
     img = None
     with dr.suspend_grad():
+        ref_integrator = mi.load_dict(
+            {
+                "type": "ptracer",
+            }
+        )
+        ref = mi.render(scene, integrator=ref_integrator, spp=128)
+        mi.util.write_bitmap("out/ref_ptrace.png", ref)
+        del ref
+        del ref_integrator
+
         ref_integrator = mi.load_dict(
             {
                 "type": "path",
@@ -62,8 +77,9 @@ if __name__ == "__main__":
         )
         ref = mi.render(scene, integrator=ref_integrator, spp=128)
         mi.util.write_bitmap("out/ref.png", ref)
+        del ref_integrator
 
-        for j in range(1):
+        for j in range(10):
             nimg = render_pssmlt(seed=j, n=100)
 
             if img is None:
@@ -71,6 +87,8 @@ if __name__ == "__main__":
             else:
                 img = img * mi.Float((j) / (j + 1)) + nimg / mi.Float(j + 1)
             mi.util.write_bitmap(f"out/j{j}.png", img, write_async=False)
+            del nimg
+            gc.collect()
 
     fig, axs = plt.subplots(2, 2, figsize=(10, 10))
     axs[0][0].imshow(mi.util.convert_to_bitmap(img))
