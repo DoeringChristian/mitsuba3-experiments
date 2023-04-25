@@ -1,5 +1,3 @@
-
-
 import mitsuba as mi
 import drjit as dr
 import matplotlib.pyplot as plt
@@ -9,7 +7,7 @@ mi.set_variant("cuda_ad_rgb")
 
 
 def drjitstruct(cls):
-    annotations = cls.__dict__.get('__annotations__', {})
+    annotations = cls.__dict__.get("__annotations__", {})
     drjit_struct = {}
     for name, type in annotations.items():
         drjit_struct[name] = type
@@ -54,7 +52,9 @@ class Simple(mi.SamplingIntegrator):
         self.rr_depth = props.get("rr_depth")
 
     # record a path
-    def record(self, scene: mi.Scene, sampler: mi.Sampler, ray: mi.Ray3f, active) -> Path:
+    def record(
+        self, scene: mi.Scene, sampler: mi.Sampler, ray: mi.Ray3f, active
+    ) -> Path:
         ray = mi.Ray3f(ray)
         bsdf_ctx = mi.BSDFContext()
 
@@ -66,14 +66,16 @@ class Simple(mi.SamplingIntegrator):
         depth = mi.UInt32(0)
         active = mi.Bool(active)
 
-        loop = mi.Loop(name="Path Tracing", state=lambda: (
-            sampler, ray, depth, active, prev_si))
+        loop = mi.Loop(
+            name="Path Tracing", state=lambda: (sampler, ray, depth, active, prev_si)
+        )
 
         loop.set_max_iterations(self.max_depth)
 
         while loop(active):
             si: mi.SurfaceInteraction3f = scene.ray_intersect(
-                ray, ray_flags=mi.RayFlags.All, coherent=dr.eq(depth, 0))
+                ray, ray_flags=mi.RayFlags.All, coherent=dr.eq(depth, 0)
+            )
 
             bsdf: mi.BSDF = si.bsdf(ray)
 
@@ -84,7 +86,8 @@ class Simple(mi.SamplingIntegrator):
             active_next = (depth + 1 < self.max_depth) & si.is_valid()
 
             bsdf_sample, f = bsdf.sample(
-                bsdf_ctx, si, sampler.next_1d(), sampler.next_2d(), active_next)
+                bsdf_ctx, si, sampler.next_1d(), sampler.next_2d(), active_next
+            )
 
             ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
 
@@ -99,10 +102,17 @@ class Simple(mi.SamplingIntegrator):
 
         return path
 
-    def sample(self, scene: mi.Scene, sampler: mi.Sampler, ray: mi.RayDifferential3f, medium: mi.Medium = None, active: mi.Bool = True):
-
+    def sample(
+        self,
+        scene: mi.Scene,
+        sampler: mi.Sampler,
+        ray: mi.RayDifferential3f,
+        medium: mi.Medium = None,
+        active: mi.Bool = True,
+    ):
         index, emitter_pdf, emitter_sample = scene.sample_emitter(
-            sampler.next_1d(), active)
+            sampler.next_1d(), active
+        )
 
         ld = mi.warp.square_to_uniform_sphere(sampler.next_2d())
 
@@ -114,16 +124,16 @@ class Simple(mi.SamplingIntegrator):
 mi.register_integrator("integrator", lambda props: Simple(props))
 
 scene = mi.cornell_box()
-scene['integrator']['type'] = 'integrator'
-scene['integrator']['max_depth'] = 16
-scene['integrator']['rr_depth'] = 2
-scene['sensor']['sampler']['sample_count'] = 1
-scene['sensor']['film']['width'] = 1024
-scene['sensor']['film']['height'] = 1024
+scene["integrator"]["type"] = "integrator"
+scene["integrator"]["max_depth"] = 16
+scene["integrator"]["rr_depth"] = 2
+scene["sensor"]["sampler"]["sample_count"] = 1
+scene["sensor"]["film"]["width"] = 1024
+scene["sensor"]["film"]["height"] = 1024
 scene = mi.load_dict(scene)
 
 img = mi.render(scene)
 
-plt.imshow(img ** (1. / 2.2))
+plt.imshow(img ** (1.0 / 2.2))
 plt.axis("off")
 plt.show()

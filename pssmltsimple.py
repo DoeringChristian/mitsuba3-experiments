@@ -1,10 +1,16 @@
-from pssmlt import Path, Pssmlt
+from pssmlt import Path, Pssmlt, drjitstruct
 import mitsuba as mi
 import drjit as dr
 
 
+@drjitstruct
+class PathVert:
+    wo: mi.Vector3f
+
+
 class PssmltSimple(Pssmlt):
     def __init__(self, props: mi.Properties) -> None:
+        self.path_type = PathVert
         super().__init__(props)
 
     def sample_rest(
@@ -12,12 +18,11 @@ class PssmltSimple(Pssmlt):
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
-        initialize: bool,
         wavefront_size: int,
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:
-        path_wo = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
+        path = Path(self.path_type, len(ray.d.x), self.max_depth)
 
         # --------------------- Configure loop state ----------------------
         ray = mi.Ray3f(ray)
@@ -79,20 +84,20 @@ class PssmltSimple(Pssmlt):
             bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
 
             # Pssmlt mutating
-            # wo = bsdf_sample.wo
-            # wo += self.wo[depth]
-            # wo = dr.normalize(wo)
-            wo = self.mutate_3d(self.wo[depth], bsdf_sample.wo)
+
+            vert: PathVert = self.mutate(self.path[depth], bsdf_sample.wo)
+            # wo = vert.wo
 
             # Reevaluate bsdf_weight after mutating wo
-            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
+            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, vert.wo, active)
 
-            wo[bsdf_pdf <= 0.0] = bsdf_sample.wo
+            vert.wo[bsdf_pdf <= 0.0] = bsdf_sample.wo
             bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / bsdf_pdf
 
-            path_wo[depth] = wo
+            # vert.wo = wo
+            path[depth] = vert
 
-            ray = si.spawn_ray(si.to_world(wo))
+            ray = si.spawn_ray(si.to_world(vert.wo))
 
             if False:
                 ray = dr.detach(ray)
@@ -124,7 +129,13 @@ class PssmltSimple(Pssmlt):
 
             active = active_next & (~rr_active | rr_continue) & dr.neq(fmax, 0.0)
 
-        return L, path_wo, dr.neq(depth, 0)
+        return L, path
+
+    def mutate(self, old: PathVert, wo: mi.Vector3f) -> PathVert:
+        vert = PathVert()
+        vert.wo = dr.normalize(old.wo + wo)
+
+        return vert
 
 
 mi.register_integrator("pssmlt_simple", lambda props: PssmltSimple(props))

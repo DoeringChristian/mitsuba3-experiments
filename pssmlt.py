@@ -23,14 +23,14 @@ def drjitstruct(cls):
     return cls
 
 
-class PathVert:
-    ...
+# class PathVert:
+#     ...
 
 
 class Path:
     idx: mi.UInt32
 
-    def __init__(self, wavefront_size: int, max_depth: int, dtype=PathVert):
+    def __init__(self, dtype, wavefront_size: int, max_depth: int):
         self.wavefront_size = wavefront_size
         self.max_depth = max_depth
         self.idx = dr.arange(mi.UInt32, wavefront_size)
@@ -43,12 +43,12 @@ class Path:
 
     # Return vertex at depth
     @overload
-    def __getitem__(self, depth: mi.UInt32) -> PathVert:
+    def __getitem__(self, depth: mi.UInt32):
         ...
 
     # Return a vertex at (depth, ray_index)
     @overload
-    def __getitem__(self, idx: tuple[mi.UInt32, mi.UInt32]) -> PathVert:
+    def __getitem__(self, idx: tuple[mi.UInt32, mi.UInt32]):
         ...
 
     def __getitem__(self, idx):
@@ -99,6 +99,7 @@ class Pssmlt(mi.SamplingIntegrator):
     sample_count = 0
     nee = True
     cumulative_weight: mi.Float32
+    path_type: ...
 
     def __init__(self, props: mi.Properties) -> None:
         self.max_depth = props.get("max_depth", def_value=16)
@@ -129,7 +130,9 @@ class Pssmlt(mi.SamplingIntegrator):
         print(f"{wavefront_size=}")
 
         if self.sample_count == 0:
-            self.wo = Path(wavefront_size, self.max_depth, dtype=mi.Vector3f)
+            # self.init_path()
+            self.path = Path(self.path_type, wavefront_size, self.max_depth)
+            # self.wo = Path(wavefront_size, self.max_depth, dtype=mi.Vector3f)
             self.L = mi.Color3f(0)
             self.cumulative_weight = mi.Float32(0.0)
             self.offset = mi.Vector2f(0.5)
@@ -150,7 +153,7 @@ class Pssmlt(mi.SamplingIntegrator):
         sample_pos = (mi.Point2f(pos) + offset) / mi.Point2f(film.crop_size())
         ray, ray_weight = sensor.sample_ray(0.0, 0.0, sample_pos, mi.Point2f(0.5))
 
-        L, path, valid = self.sample_rest(
+        L, path = self.sample_rest(
             scene, sampler, ray, self.sample_count == 0, wavefront_size
         )
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
@@ -167,7 +170,8 @@ class Pssmlt(mi.SamplingIntegrator):
         self.L = dr.select(u < a, L, self.L)
         u = dr.tile(u, self.max_depth)
         a = dr.tile(a, self.max_depth)
-        self.wo.vertices = dr.select(u < a, path.vertices, self.wo.vertices)
+        self.path.vertices = dr.select(u < a, path.vertices, self.path.vertices)
+        # self.wo.vertices = dr.select(u < a, path.vertices, self.wo.vertices)
 
         res = self.L / self.cumulative_weight
         film.prepare(self.aov_names())
@@ -180,7 +184,7 @@ class Pssmlt(mi.SamplingIntegrator):
         img = film.develop()
         dr.schedule(img)
         dr.schedule(self.L)
-        dr.schedule(self.wo.vertices)
+        dr.schedule(self.path.vertices)
         dr.eval()
 
         self.sample_count += 1
@@ -195,15 +199,17 @@ class Pssmlt(mi.SamplingIntegrator):
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
-        initialize: bool,
         wavefront_size: int,
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:
         ...
 
+    def init_path(self, wavefront_size):
+        ...
+
     def mutate_2d(self, x: mi.Vector2f, xnew: mi.Vector2f):
         return dr.clamp(x + xnew * 0.2, 0.0, 1.0)
 
-    def mutate_3d(self, x: mi.Vector3f, xnew: mi.Vector3f):
-        return dr.normalize(x + xnew)
+    def mutate(self, x, xnew):
+        ...
