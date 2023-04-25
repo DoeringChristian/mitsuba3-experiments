@@ -17,7 +17,7 @@ if __name__ == "__main__":
     scene["sensor"]["film"]["height"] = 1024
     scene["sphere"] = {
         "type": "sphere",
-        "to_world": mi.ScalarTransform4f.translate([0.335, -0.7, 0.38]).scale(0.3),
+        "to_world": mi.ScalarTransform4f.translate([0.335, -0.6, 0.38]).scale(0.3),
         "bsdf": {"type": "dielectric"},
     }
     # scene["blocking"] = {
@@ -27,6 +27,7 @@ if __name__ == "__main__":
     del scene["small-box"]
     print(f"{scene=}")
     scene = mi.load_dict(scene)
+    scene = mi.load_file("data/caustics/scene.xml")
 
     def render_pssmlt(n=100, seed=0, mlt_burnin=50):
         integrator: pssmltsimple.Pssmlt = mi.load_dict(
@@ -41,7 +42,7 @@ if __name__ == "__main__":
             print(f"{i=}")
             # nimg = mi.render(scene, integrator=integrator, seed=i + seed * n, spp=1)
             nimg = integrator.render(
-                scene, scene.sensors()[0], seed=i + seed * n, spp=1
+                scene, scene.sensors()[0], seed=i + seed * n, spp=2
             )
             if img is None or i < mlt_burnin:
                 img = nimg

@@ -3,6 +3,7 @@ import mitsuba as mi
 import drjit as dr
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
+import gc
 
 
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
@@ -140,7 +141,6 @@ class Pssmlt(mi.SamplingIntegrator):
 
         # dr.schedule(self.L)
         # dr.schedule(self.path.vertices)
-        dr.eval()
 
         sampler = sensor.sampler()
         sampler.set_sample_count(spp)
@@ -148,6 +148,7 @@ class Pssmlt(mi.SamplingIntegrator):
         sampler.seed(seed, wavefront_size)
 
         idx = dr.arange(mi.UInt, wavefront_size)
+        idx //= spp
 
         pos = mi.Vector2u()
         pos.y = idx // film_size.x
@@ -161,7 +162,9 @@ class Pssmlt(mi.SamplingIntegrator):
         L = self.sample_rest(
             scene, sampler, ray, self.proposed, self.sample_count == 0, wavefront_size
         )
-        dr.eval(L, self.proposed.vertices)
+        dr.schedule(self.proposed.vertices)
+        # dr.eval(L, self.proposed.vertices)
+        # dr.eval(self.proposed.vertices)
         a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
         u = sampler.next_1d()
 
@@ -171,14 +174,19 @@ class Pssmlt(mi.SamplingIntegrator):
         self.cumulative_weight = dr.select(
             accept, proposed_weight, self.cumulative_weight + current_weight
         )
+        dr.schedule(self.cumulative_weight)
 
         self.offset = dr.select(u < a, offset, self.offset)
+        dr.schedule(self.offset)
 
         self.L = dr.select(accept, L, self.L)
+        dr.schedule(self.L)
+
         accept = dr.tile(accept, self.max_depth)
         self.path.vertices = dr.select(
             accept, self.proposed.vertices, self.path.vertices
         )
+        dr.schedule(self.path.vertices)
 
         res = self.L / self.cumulative_weight
         film.prepare(self.aov_names())
