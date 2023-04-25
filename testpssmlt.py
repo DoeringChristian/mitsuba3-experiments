@@ -7,6 +7,7 @@ from dataclasses import dataclass
 mi.set_variant("cuda_ad_rgb")
 import pssmltpath
 import pssmltsimple
+import simple
 
 
 scene = mi.cornell_box()
@@ -60,7 +61,7 @@ with dr.suspend_grad():
 
     ref_integrator = mi.load_dict(
         {
-            "type": "path",
+            "type": "integrator",
         }
     )
     ref = mi.render(scene, integrator=ref_integrator, spp=128)

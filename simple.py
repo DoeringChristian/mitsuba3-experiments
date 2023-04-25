@@ -8,8 +8,8 @@ mi.set_variant("cuda_ad_rgb")
 class Simple(mi.SamplingIntegrator):
     def __init__(self, props=mi.Properties()):
         super().__init__(props)
-        self.max_depth = props.get("max_depth")
-        self.rr_depth = props.get("rr_depth")
+        self.max_depth = props.get("max_depth", def_value=8)
+        self.rr_depth = props.get("rr_depth", def_value=2)
 
     def sample(
         self,
@@ -118,17 +118,18 @@ class Simple(mi.SamplingIntegrator):
 
 mi.register_integrator("integrator", lambda props: Simple(props))
 
-scene = mi.cornell_box()
-scene["integrator"]["type"] = "integrator"
-scene["integrator"]["max_depth"] = 16
-scene["integrator"]["rr_depth"] = 2
-scene["sensor"]["sampler"]["sample_count"] = 64
-scene["sensor"]["film"]["width"] = 1024
-scene["sensor"]["film"]["height"] = 1024
-scene = mi.load_dict(scene)
+if __name__ == "__main__":
+    scene = mi.cornell_box()
+    scene["integrator"]["type"] = "integrator"
+    scene["integrator"]["max_depth"] = 16
+    scene["integrator"]["rr_depth"] = 2
+    scene["sensor"]["sampler"]["sample_count"] = 64
+    scene["sensor"]["film"]["width"] = 1024
+    scene["sensor"]["film"]["height"] = 1024
+    scene = mi.load_dict(scene)
 
-img = mi.render(scene)
+    img = mi.render(scene)
 
-plt.imshow(img ** (1.0 / 2.2))
-plt.axis("off")
-plt.show()
+    plt.imshow(img ** (1.0 / 2.2))
+    plt.axis("off")
+    plt.show()
