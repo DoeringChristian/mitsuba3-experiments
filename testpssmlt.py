@@ -30,7 +30,7 @@ scene = mi.load_dict(scene)
 def render_pssmlt(n=100, seed=0):
     integrator: pssmltsimple.Pssmlt = mi.load_dict(
         {
-            "type": "pssmlt_simple",
+            "type": "pssmlt",
             "max_depth": 8,
             "rr_depth": 2,
         }

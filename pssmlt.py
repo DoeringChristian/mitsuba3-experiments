@@ -210,6 +210,3 @@ class Pssmlt(mi.SamplingIntegrator):
 
     def mutate_2d(self, x: mi.Vector2f, xnew: mi.Vector2f):
         return dr.clamp(x + xnew * 0.2, 0.0, 1.0)
-
-    def mutate(self, x, xnew):
-        ...

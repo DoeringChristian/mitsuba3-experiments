@@ -1,10 +1,17 @@
-from pssmlt import Path, Pssmlt, mis_weight
+from pssmlt import Path, Pssmlt, drjitstruct, mis_weight
 import mitsuba as mi
 import drjit as dr
 
 
+@drjitstruct
+class PathVert:
+    wo: mi.Vector3f
+    emitter_sample: mi.Point2f
+
+
 class PssmltPath(Pssmlt):
     def __init__(self, props: mi.Properties) -> None:
+        self.path_type = PathVert
         super().__init__(props)
 
     def sample_rest(
@@ -17,23 +24,24 @@ class PssmltPath(Pssmlt):
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:
-        if initialize:
-            self.emitter_offset = Path(wavefront_size, self.max_depth, mi.Vector2f)
-        path_wo = Path(len(ray.d.x), self.max_depth, dtype=mi.Vector3f)
+        # if initialize:
+        #     self.emitter_offset = Path(wavefront_size, self.max_depth, mi.Vector2f)
+        path = Path(PathVert, len(ray.d.x), self.max_depth)
 
-        # --------------------- Configure loop state ----------------------
         ray = mi.Ray3f(ray)
+        active = mi.Bool(active)
         f = mi.Spectrum(1.0)
         L = mi.Spectrum(0.0)
         eta = mi.Float(1.0)
         depth = mi.UInt32(0)
-        bsdf_ctx = mi.BSDFContext()
+
+        valid_ray = mi.Bool(scene.environment() is not None)
 
         # Variables caching information from the previous bounce
-        prev_si = dr.zeros(mi.SurfaceInteraction3f)
+        prev_si: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
         prev_bsdf_pdf = mi.Float(1.0)
         prev_bsdf_delta = mi.Bool(True)
-        active = mi.Bool(active)
+        bsdf_ctx = mi.BSDFContext()
 
         loop = mi.Loop(
             "Path Tracer",
@@ -44,6 +52,7 @@ class PssmltPath(Pssmlt):
                 L,
                 eta,
                 depth,
+                valid_ray,
                 prev_si,
                 prev_bsdf_pdf,
                 prev_bsdf_delta,
@@ -54,78 +63,83 @@ class PssmltPath(Pssmlt):
         loop.set_max_iterations(self.max_depth)
 
         while loop(active):
-            with dr.resume_grad():
-                si: mi.SurfaceInteraction3f = scene.ray_intersect(
-                    ray, mi.RayFlags.All, coherent=mi.Bool(False)
-                )
+            si = scene.ray_intersect(ray)  # TODO: not necesarry in first interaction
 
             # ---------------------- Direct emission ----------------------
+
             ds = mi.DirectionSample3f(scene, si, prev_si)
-            em_pdf = scene.eval_emitter_direction(prev_si, ds, ~prev_bsdf_delta)
+            em_pdf = mi.Float(0.0)
+
+            em_pdf = scene.pdf_emitter_direction(prev_si, ds, ~prev_bsdf_delta)
 
             mis_bsdf = mis_weight(prev_bsdf_pdf, em_pdf)
-            # mis_bsdf = 1.0
 
-            # L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.) * mis_bsdf, L)
-            with dr.resume_grad():
-                # Le = f * mis_bsdf * ds.emitter.eval(si)
-                L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.0) * mis_bsdf, L)
+            L = dr.fma(
+                f,
+                ds.emitter.eval(si, prev_bsdf_pdf > 0.0) * mis_bsdf,
+                L,
+            )
 
-            active_next = (depth + 1 < self.max_depth) & si.is_valid()
+            active_next = ((depth + 1) < self.max_depth) & si.is_valid()
+
+            bsdf: mi.BSDF = si.bsdf(ray)
+
+            # ------ Evaluate BSDF * cos(theta) and sample direction -------
+
+            # sample1 = sampler.next_1d()
+            # sample2 = sampler.next_2d()
+
+            # bsdf_val, bsdf_pdf, bsdf_sample, bsdf_weight = bsdf.eval_pdf_sample(
+            #     bsdf_ctx, si, wo, sample1, sample2
+            # )
+
+            # ---------------------- BSDF sampling ----------------------
+
+            bsdf_sample, bsdf_weight = bsdf.sample(
+                bsdf_ctx, si, sampler.next_1d(), sampler.next_2d()
+            )
+
+            bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
+
+            vert: PathVert = self.mutate(
+                self.path[depth], bsdf_sample.wo, sampler.next_2d()
+            )
+
+            ray = si.spawn_ray(si.to_world(vert.wo))
 
             # ---------------------- Emitter sampling ----------------------
 
-            bsdf: mi.BSDF = si.bsdf(ray)
-            active_em = active_next & mi.has_flag(bsdf.flags(), mi.BSDFFlags.All)
+            active_em = active_next & mi.has_flag(bsdf.flags(), mi.BSDFFlags.Smooth)
 
             ds, em_weight = scene.sample_emitter_direction(
-                si, sampler.next_2d(), True, active_em
+                si, vert.emitter_sample, True, active_em
             )
-            active_em &= dr.neq(ds.pdf, 0.0)
-
-            with dr.resume_grad():
-                ds.d = dr.normalize(ds.p - si.p)
-                em_val = scene.eval_emitter_direction(si, ds, active_em)
-                em_weight = dr.select(dr.neq(ds.pdf, 0), em_val / ds.pdf, 0)
-                dr.disable_grad(ds.d)
 
             wo = si.to_local(ds.d)
-            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active_em)
+
+            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo)
+
+            # --------------- Emitter sampling contribution ----------------
+
             bsdf_val = si.to_world_mueller(bsdf_val, -wo, si.wi)
 
-            mis_em = dr.select(ds.delta, 1.0, mis_weight(ds.pdf, bsdf_pdf))
+            mi_em = dr.select(ds.delta, 1.0, mis_weight(ds.pdf, bsdf_pdf))
 
-            L[active_em] = dr.fma(f, bsdf_val * em_weight * mis_em, L)
-
-            # ---------------------- BSDF sampling ----------------------
-            s1 = sampler.next_1d()
-            s2 = sampler.next_2d()
-
-            bsdf_sample, bsdf_weight = bsdf.sample(bsdf_ctx, si, s1, s2, active_next)
-            bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
-
-            # Pssmlt adjusting
-            wo = self.mutate_3d(self.wo[depth], bsdf_sample.wo)
-            # wo = bsdf_sample.wo
-            # wo += self.wo[depth]
-            # wo = dr.normalize(wo)
-
-            # Reevaluate bsdf_weight after mutating wo
-            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
-
-            wo[bsdf_pdf <= 0.0] = bsdf_sample.wo
-            bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / bsdf_pdf
-
-            path_wo[depth] = wo
-
-            ray = si.spawn_ray(si.to_world(wo))
+            L[active_em] = dr.fma(f, bsdf_val * em_weight * mi_em, L)
 
             # ------ Update loop variables based on current interaction ------
 
+            path[depth] = vert
+
             f *= bsdf_weight
             eta *= bsdf_sample.eta
+            valid_ray |= (
+                active
+                & si.is_valid()
+                & ~mi.has_flag(bsdf_sample.sampled_type, mi.BSDFFlags.Null)
+            )
 
-            prev_si = dr.detach(si)
+            prev_si = si
             prev_bsdf_pdf = bsdf_sample.pdf
             prev_bsdf_delta = mi.has_flag(bsdf_sample.sampled_type, mi.BSDFFlags.Delta)
 
@@ -133,17 +147,26 @@ class PssmltPath(Pssmlt):
 
             depth[si.is_valid()] += 1
 
-            fmax = dr.max(f)
+            throughput_max = dr.max(f)
 
-            rr_prob = dr.minimum(fmax * dr.sqr(eta), 0.95)
+            rr_prop = dr.minimum(throughput_max * dr.sqr(eta), 0.95)
             rr_active = depth >= self.rr_depth
-            rr_continue = sampler.next_1d() < rr_prob
+            rr_continue = sampler.next_1d() < rr_prop
 
-            f[rr_active] *= dr.rcp(dr.detach(rr_prob))
+            f[rr_active] *= dr.rcp(rr_prop)
 
-            active = active_next & (~rr_active | rr_continue) & dr.neq(fmax, 0.0)
+            active = (
+                active_next & (~rr_active | rr_continue) & (dr.neq(throughput_max, 0.0))
+            )
 
-        return L, path_wo, dr.neq(depth, 0)
+        return L, path
+
+    def mutate(self, old: PathVert, wo: mi.Vector3f, sample1: mi.Point2f) -> PathVert:
+        vert = PathVert()
+        vert.wo = dr.normalize(old.wo + wo)
+        vert.emitter_sample = dr.clamp(sample1 * 0.2 + old.emitter_sample, 0.0, 1.0)
+
+        return vert
 
 
 mi.register_integrator("pssmlt", lambda props: PssmltPath(props))
