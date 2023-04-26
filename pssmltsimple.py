@@ -13,16 +13,17 @@ class PssmltSimple(Pssmlt):
         self.path_type = PathVert
         super().__init__(props)
 
-    def sample_rest(
+    def sample(
         self,
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
-        wavefront_size: int,
+        path: Path,
+        large_step: mi.Bool,
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:
-        path = Path(self.path_type, len(ray.d.x), self.max_depth)
+        large_step = mi.Bool(large_step)
 
         # --------------------- Configure loop state ----------------------
         ray = mi.Ray3f(ray)
@@ -85,7 +86,7 @@ class PssmltSimple(Pssmlt):
 
             # Pssmlt mutating
 
-            vert: PathVert = self.mutate(self.path[depth], bsdf_sample.wo)
+            vert: PathVert = self.mutate(self.path[depth], bsdf_sample.wo, large_step)
             # wo = vert.wo
 
             # Reevaluate bsdf_weight after mutating wo
@@ -129,11 +130,14 @@ class PssmltSimple(Pssmlt):
 
             active = active_next & (~rr_active | rr_continue) & dr.neq(fmax, 0.0)
 
-        return L, path
+        return L
 
-    def mutate(self, old: PathVert, wo: mi.Vector3f) -> PathVert:
+    def mutate(self, old: PathVert, wo: mi.Vector3f, large_step: mi.Bool) -> PathVert:
+        large_step = mi.Bool(large_step)
+
         vert = PathVert()
-        vert.wo = dr.normalize(old.wo + wo)
+        a = 0.1
+        vert.wo = dr.select(large_step, wo, dr.normalize(old.wo * (1 - a) + wo * a))
 
         return vert
 

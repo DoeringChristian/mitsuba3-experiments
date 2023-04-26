@@ -97,7 +97,7 @@ class Pssmlt(mi.SamplingIntegrator):
     wo: Path
     L: mi.Color3f
     offset: mi.Vector2f
-    sample_count = 0
+    # sample_count = 0
     cumulative_weight: mi.Float32
     path_type: ...
 
@@ -107,7 +107,62 @@ class Pssmlt(mi.SamplingIntegrator):
         super().__init__(props)
 
     def reset(self):
-        self.sample_count = 0
+        ...
+
+    def render_sample(
+        self,
+        scene: mi.Scene,
+        sampler: mi.Sampler,
+        sensor: mi.Sensor,
+        block: mi.ImageBlock,
+        pos: mi.Vector2u,
+        large_step: mi.Bool,
+        agregate: mi.Bool,
+    ):
+        large_step = mi.Bool(large_step)
+        agregate = mi.Bool(agregate)
+        film = sensor.film()
+
+        proposed_offset = self.mutate_offset(self.offset, sampler.next_2d(), large_step)
+
+        sample_pos = (mi.Point2f(pos) + proposed_offset) / mi.Point2f(film.crop_size())
+        ray, ray_weight = sensor.sample_ray(0.0, 0.0, sample_pos, mi.Point2f(0.5))
+
+        L = (
+            self.sample(scene, sampler, ray, self.proposed, large_step=large_step)
+            * ray_weight
+        )
+        dr.schedule(self.proposed.vertices)
+
+        a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
+        u = sampler.next_1d()
+
+        accept = u < a
+        proposed_weight = a
+        current_weight = 1.0 - a
+        self.cumulative_weight[accept] = proposed_weight
+        self.cumulative_weight[~accept] += current_weight
+        dr.schedule(self.cumulative_weight)
+
+        # self.offset = dr.select(u < a, offset, self.offset)
+        self.offset[accept] = proposed_offset
+        dr.schedule(self.offset)
+
+        # self.L = dr.select(accept, L, self.L)
+        self.L[accept] = L
+        dr.schedule(self.L)
+
+        accept = dr.tile(accept, self.max_depth)
+        self.path.vertices = dr.select(
+            accept, self.proposed.vertices, self.path.vertices
+        )
+        dr.schedule(self.path.vertices)
+
+        res = self.L / self.cumulative_weight
+        dr.schedule(self.cumulative_weight)
+
+        aovs = [res.x, res.y, res.z, mi.Float(1.0)]
+        block.put(pos, aovs, active=agregate)
 
     def render(
         self,
@@ -122,18 +177,8 @@ class Pssmlt(mi.SamplingIntegrator):
 
         film_size = film.crop_size()
 
-        # if self.film_size is None:
-        #     self.film_size = film_size
-
         wavefront_size = film_size.x * film_size.y * spp
         print(f"{wavefront_size=}")
-
-        if self.sample_count == 0:
-            self.path = Path(self.path_type, wavefront_size, self.max_depth)
-            self.proposed = Path(self.path_type, wavefront_size, self.max_depth)
-            self.L = mi.Color3f(0)
-            self.cumulative_weight = mi.Float32(0.0)
-            self.offset = mi.Vector2f(0.5)
 
         sampler = sensor.sampler()
         sampler.set_sample_count(spp)
@@ -147,65 +192,48 @@ class Pssmlt(mi.SamplingIntegrator):
         pos.y = idx // film_size.x
         pos.x = dr.fma(-film_size.x, pos.y, idx)
 
-        offset = self.mutate_2d(self.offset, sampler.next_2d())
+        # Initialize State:
+        self.path = Path(self.path_type, wavefront_size, self.max_depth)
+        self.proposed = Path(self.path_type, wavefront_size, self.max_depth)
+        self.offset = mi.Vector2f(0.5)
+        self.L = mi.Color3f(0)
+        self.cumulative_weight = mi.Float32(0.0)
 
-        sample_pos = (mi.Point2f(pos) + offset) / mi.Point2f(film.crop_size())
-        ray, ray_weight = sensor.sample_ray(0.0, 0.0, sample_pos, mi.Point2f(0.5))
-
-        L = self.sample_rest(
-            scene, sampler, ray, self.proposed, self.sample_count == 0, wavefront_size
-        )
-        dr.schedule(self.proposed.vertices)
-
-        a = dr.clamp(mi.luminance(L) / mi.luminance(self.L), 0.0, 1.0)
-        u = sampler.next_1d()
-
-        accept = u < a
-        proposed_weight = a
-        current_weight = 1.0 - a
-        # self.cumulative_weight = dr.select(
-        #     accept, proposed_weight, self.cumulative_weight + current_weight
-        # )
-        self.cumulative_weight[accept] = proposed_weight
-        self.cumulative_weight[~accept] += current_weight
-        dr.schedule(self.cumulative_weight)
-
-        # self.offset = dr.select(u < a, offset, self.offset)
-        self.offset[accept] = offset
-        dr.schedule(self.offset)
-
-        # self.L = dr.select(accept, L, self.L)
-        self.L[accept] = L
-        dr.schedule(self.L)
-
-        accept = dr.tile(accept, self.max_depth)
-        self.path.vertices = dr.select(
-            accept, self.proposed.vertices, self.path.vertices
-        )
-        # self.path.vertices[accept] = self.proposed.vertices
-        dr.schedule(self.path.vertices)
-
-        res = self.L / self.cumulative_weight
         film.prepare(self.aov_names())
 
         block: mi.ImageBlock = film.create_block()
-        aovs = [res.x, res.y, res.z, mi.Float(1.0)]
-        block.put(pos, aovs)
+
+        reset_interval = 50
+        bootstrapping_count = 40
+        for i in range(200):
+            large_step = i % reset_interval == 0
+            agregate = i % reset_interval > bootstrapping_count
+            print(f"Iteration: {i}")
+            print(f"{large_step=}")
+            print(f"{agregate=}")
+
+            self.render_sample(scene, sampler, sensor, block, pos, large_step, agregate)
+
+            sampler.advance()
+            sampler.schedule_state()
+            dr.eval(block.tensor())
+
         film.put_block(block)
 
         img = film.develop()
         dr.schedule(img)
         dr.eval()
 
-        self.sample_count += 1
+        # self.sample_count += 1
         return img
 
-    def sample_rest(
+    def sample(
         self,
         scene: mi.Scene,
         sampler: mi.Sampler,
-        ray: mi.RayDifferential3f,
-        wavefront_size: int,
+        ray: mi.Ray3f,
+        path: Path,
+        large_step: mi.Bool,
         medium: mi.Medium = None,
         active: bool = True,
     ) -> tuple[mi.Color3f, Path]:
@@ -214,5 +242,14 @@ class Pssmlt(mi.SamplingIntegrator):
     def init_path(self, wavefront_size):
         ...
 
-    def mutate_2d(self, x: mi.Vector2f, xnew: mi.Vector2f):
-        return dr.clamp(x + xnew * 0.2, 0.0, 1.0)
+    def mutate_offset(self, x_old: mi.Vector2f, xnew: mi.Vector2f, large_step: mi.Bool):
+        large_step = mi.Bool(large_step)
+        return dr.select(
+            large_step,
+            xnew,
+            dr.clamp(
+                mi.warp.square_to_std_normal(xnew) * dr.sqrt(0.1) + x_old,
+                0.0,
+                1.0,
+            ),
+        )

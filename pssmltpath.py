@@ -14,20 +14,20 @@ class PssmltPath(Pssmlt):
         self.path_type = PathVert
         super().__init__(props)
 
-    def sample_rest(
+    def sample(
         self,
         scene: mi.Scene,
         sampler: mi.Sampler,
         ray: mi.RayDifferential3f,
         path: Path,
-        initialize: bool,
-        wavefront_size: int,
+        large_step: mi.Bool,
         medium: mi.Medium = None,
         active: bool = True,
     ) -> mi.Color3f:
         # if initialize:
         #     self.emitter_offset = Path(wavefront_size, self.max_depth, mi.Vector2f)
         # path = Path(PathVert, len(ray.d.x), self.max_depth)
+        large_step = mi.Bool(large_step)
 
         ray = mi.Ray3f(ray)
         active = mi.Bool(active)
@@ -101,7 +101,7 @@ class PssmltPath(Pssmlt):
             )
 
             vert: PathVert = self.mutate(
-                self.path[depth], bsdf_sample.wo, sampler.next_2d()
+                self.path[depth], bsdf_sample.wo, sampler.next_2d(), large_step
             )
 
             bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, vert.wo, active)
@@ -167,11 +167,24 @@ class PssmltPath(Pssmlt):
 
         return L
 
-    def mutate(self, old: PathVert, wo: mi.Vector3f, sample1: mi.Point2f) -> PathVert:
+    def mutate(
+        self, old: PathVert, wo: mi.Vector3f, sample1: mi.Point2f, large_step: mi.Bool
+    ) -> PathVert:
+        large_step = mi.Bool(large_step)
         vert = PathVert()
-        vert.wo = dr.normalize(old.wo + wo * 1.0)
-        vert.emitter_sample = dr.clamp(
-            mi.warp.square_to_std_normal(sample1) * 0.2 + old.emitter_sample, 0.0, 1.0
+        # vert.wo = dr.select(large_step, wo, dr.normalize(old.wo + wo * 10000.0))
+        a = 0.01
+        vert.wo = dr.select(large_step, wo, dr.normalize(old.wo * (1 - a) + wo * a))
+
+        vert.emitter_sample = dr.select(
+            large_step,
+            sample1,
+            dr.clamp(
+                mi.warp.square_to_std_normal(sample1) * dr.sqrt(0.01)
+                + old.emitter_sample,
+                0.0,
+                1.0,
+            ),
         )
 
         return vert
