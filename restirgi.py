@@ -92,9 +92,10 @@ class RestirReservoir:
 
 
 class PathIntegrator(mi.SamplingIntegrator):
-    M_MAX = 500
-    max_r = 100
-    dist_threshold = 0.01
+    # M_MAX = 500
+    M_MAX = 2000
+    max_r = 10
+    dist_threshold = 0.1
     angle_threshold = 25 * dr.pi / 180
 
     def __init__(self, props: mi.Properties):
@@ -264,8 +265,8 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
             dist = dr.norm(q_n.x_v - q.x_v)
-            # active = dist < self.dist_threshold
-            active = mi.Bool(True)
+            active = dist < self.dist_threshold
+            # active = mi.Bool(True)
             active &= dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
             active &= i < max_iter
 
@@ -295,8 +296,12 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, q.x_v), active)
 
-            # phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o) * J_rcp(q, R_n.z))
-            phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o))
+            phat = dr.select(
+                ~active | shadowed,
+                0,
+                p_hat(R_n.z.L_o),  # * dr.clamp(J_rcp(R_n.z, q), 0.0, 1000.0),
+            )
+            # phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o))
 
             R_s.merge(sampler, R_n, phat, active)
 
@@ -513,8 +518,14 @@ if __name__ == "__main__":
         scene = mi.cornell_box()
         scene["sensor"]["film"]["width"] = 1024
         scene["sensor"]["film"]["height"] = 1024
+        scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
+        # scene["sensor"]["sampler"] = {"type": "multijitter"}
         print(f"{scene=}")
         scene: mi.Scene = mi.load_dict(scene)
+        # scene = mi.load_file("data/veach-ajar/scene.xml")
+
+        ref = mi.render(scene, spp=50 * 4)
+        mi.util.write_bitmap("out/ref.jpg", ref)
 
         integrator: PathIntegrator = mi.load_dict(
             {
