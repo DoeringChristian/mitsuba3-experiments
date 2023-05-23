@@ -3,6 +3,7 @@ import drjit as dr
 
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
+    dr.set_flag(dr.JitFlag.LoopRecord, False)
 
 
 def hash(p: mi.Point3u | mi.Point3f, hash_size: int):
@@ -29,38 +30,8 @@ def cumsum(src: mi.UInt | mi.Float):
     return dst
 
 
-class BinIter:
-    """
-    This is an Iterator that can be used to iterate through all Cells in a Bin of a HashGrid.
-    """
-
-    def __init__(
-        self, sample_idx: mi.UInt, sample, offset: mi.UInt, size: mi.UInt
-    ) -> None:
-        self.sample_idx = sample_idx
-        self.sample = sample
-        self.start = offset
-        self.end = offset + size
-
-    def next_index(self) -> tuple[mi.UInt, mi.Bool]:
-        active = self.start < self.end
-        idx = dr.gather(mi.UInt, self.sample_idx, self.start, active)
-        self.start[active] += 1
-        return idx, active
-
-    def next(self) -> tuple[mi.UInt, mi.Bool]:
-        active = self.start < self.end
-        idx = dr.gather(mi.UInt, self.sample_idx, self.start, active)
-        sample = dr.gather(mi.Point3f, self.sample, idx, active)
-        self.start[active] += 1
-        return idx, sample, active
-
-    def len(self) -> mi.UInt:
-        return self.end - self.start
-
-
 class HashGrid:
-    def __init__(self, sample: mi.Point3f, resolution: int) -> None:
+    def __init__(self, sample: mi.Point3f, radius: mi.Float, resolution: int) -> None:
         """
         Constructs a 3D Hash Grid with the samples inserted.
 
@@ -70,16 +41,62 @@ class HashGrid:
         @param resolution: The number of grid cells in each dimension
         """
         hash_size = dr.shape(sample)[-1]
-        self.hash_size = hash_size
+        # self.hash_size = hash_size
         self.resolution = resolution
         self.bbmin = mi.Point3f(dr.min(sample.x), dr.min(sample.y), dr.min(sample.z))
         self.bbmax = (
             mi.Point3f(dr.max(sample.x), dr.max(sample.y), dr.max(sample.z)) + 0.0001
         )
 
-        h = hash(
-            (sample - self.bbmin) / (self.bbmax - self.bbmin) * resolution, hash_size
-        )
+        # bin_size = dr.zeros(mi.UInt, self.hash_size)
+
+        pmin = self.to_grid(sample - mi.Vector3f(radius))
+        pmax = self.to_grid(sample + mi.Vector3f(radius)) + 1
+        print(f"{pmin=}")
+        print(f"{pmax=}")
+
+        grid: mi.Vector3u = pmax - pmin
+        bins_per_grid = grid.x * grid.y * grid.z
+        self.hash_size = dr.sum(bins_per_grid)[0]
+
+        bin_size = dr.zeros(mi.UInt, self.hash_size)
+        idx = mi.UInt(0)
+
+        loop = mi.Loop("Bin Size", lambda: (idx,))
+
+        while loop(idx < bins_per_grid):
+            z = idx // grid.x * grid.y
+            y = idx % grid.z // grid.x
+            x = idx % grid.z % grid.y
+            p = mi.Point3u(x, y, z)
+            h = hash(p, self.hash_size)
+            dr.scatter_reduce(dr.ReduceOp.Add, bin_size, 1, h)
+            idx += 1
+
+        dr.eval(bin_size)
+        bin_offset = cumsum(bin_size)
+        max_bin_size = dr.max(bin_size)[0]
+
+        print(f"{bin_size=}")
+        print(f"{bin_offset=}")
+        print(f"{self.hash_size=}")
+
+        loop_record = dr.flag(dr.JitFlag.LoopRecord)
+        dr.set_flag(dr.JitFlag.LoopRecord, False)
+
+        loop = mi.Loop("Fill Bins", lambda: ())
+
+        loop.set_max_iterations(max_bin_size)
+
+        depth = mi.UInt(0)
+
+        while loop(depth < max_bin_size):
+            ...
+
+        dr.set_flag(dr.JitFlag.LoopRecord, loop_record)
+        return
+
+        h = self.hash(sample)
 
         """
         In order to calculate the offset for every bin we first calculate the
@@ -114,6 +131,8 @@ class HashGrid:
         calling `dr.eval` on `sample_idx`.
         Therefore the loop cannot be a Dr.Jit loop.
         """
+        loop_record = dr.flag(dr.JitFlag.LoopRecord)
+        dr.set_flag(dr.JitFlag.LoopRecord, False)
         for depth in range(max_iterations):
             dr.scatter_reduce(
                 dr.ReduceOp.Max,
@@ -130,41 +149,121 @@ class HashGrid:
             is_selected_sample = dr.eq(selected_sample, dr.arange(mi.UInt, hash_size))
             active_sample &= ~is_selected_sample
 
+        dr.set_flag(dr.JitFlag.LoopRecord, loop_record)
+
         self.__bin_size = bin_size
         self.__bin_offset = bin_offset
         self.__sample_idx = sample_idx
         self.__sample = sample
 
-    def bin(self, sample: mi.Point3f) -> BinIter:
-        """
-        Funciton to get an Bin Iterator for a sample.
-        """
-        h = hash(
+    def to_grid(self, p: mi.Point2f) -> mi.Point3u:
+        p_grid = dr.clamp(
+            mi.Point3u((p - self.bbmin) / (self.bbmax - self.bbmin) * self.resolution),
+            mi.Point3u(0),
+            mi.Point3u(self.resolution),
+        )
+        return p_grid
+
+    def hash(self, sample: mi.Point2f):
+        return hash(
             (sample - self.bbmin) / (self.bbmax - self.bbmin) * self.resolution,
             self.hash_size,
         )
-        bin_offset = dr.gather(mi.UInt, self.__bin_offset, h)
-        bin_size = dr.gather(mi.UInt, self.__bin_size, h)
 
-        return BinIter(self.__sample_idx, self.__sample, bin_offset, bin_size)
+
+class SPPMIntegrator(mi.SamplingIntegrator):
+    def __init__(self, props: mi.Properties) -> None:
+        super().__init__(props)
+
+    def sample_visible_point(
+        self,
+        scene: mi.Scene,
+        sensor: mi.Sensor,
+        sampler: mi.Sampler,
+        sample_pos: mi.Point2f,
+    ) -> tuple[mi.SurfaceInteraction3f, mi.Spectrum]:
+        ray, ray_weight = sensor.sample_ray(0.0, 0.0, sample_pos, mi.Point2f(0.5))
+        max_depth = 6
+        β = mi.Spectrum(1.0)
+        depth = mi.UInt(0)
+        active = mi.Bool(True)
+        bsdf_ctx = mi.BSDFContext()
+        si: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
+
+        loop = mi.Loop("Camera Tracing", lambda: (depth, active, β, ray, si))
+        loop.set_max_iterations(max_depth)
+
+        while loop(active):
+            si: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
+
+            bsdf: mi.BSDF = si.bsdf(ray)
+            bsdf_sample, bsdf_weight = bsdf.sample(
+                bsdf_ctx, si, sampler.next_1d(), sampler.next_2d(), active
+            )
+
+            active &= si.is_valid()
+            active &= ~mi.has_flag(bsdf_sample.sampled_type, mi.BSDFFlags.Smooth)
+            active &= depth < max_depth
+
+            ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
+
+            β[active] *= bsdf_weight
+            depth += 1
+
+        return si, β
+
+    def render(
+        self,
+        scene: mi.Scene,
+        sensor: mi.Sensor,
+        seed: int,
+        spp: int,
+        develop: bool,
+        evaluate: bool,
+    ) -> mi.TensorXf:
+        film = sensor.film()
+        film_size = film.crop_size()
+
+        wavefront_size = film_size.x * film_size.y
+
+        sampler = sensor.sampler()
+        sampler.set_sample_count(1)
+        sampler.set_samples_per_wavefront(1)
+        sampler.seed(seed, wavefront_size)
+
+        idx = dr.arange(mi.UInt, wavefront_size)
+        pos = mi.Vector2u()
+        pos.y = idx // film_size.x
+        pos.x = dr.fma(-film_size.x, pos.y, idx)
+
+        sample_pos = (mi.Point2f(pos) + sampler.next_2d()) / mi.Point2f(
+            film.crop_size()
+        )
+
+        # Sample visible points:
+
+        vp_si, vp_β = self.sample_visible_point(scene, sensor, sampler, sample_pos)
+
+        dr.eval(vp_si, vp_β)
+
+        grid = HashGrid(vp_si.p, 100)
+        print(f"{vp_β=}")
+        print(f"{dr.count(vp_si.is_valid())=}")
+
+        ...
 
 
 if __name__ == "__main__":
-    N = 100
-
     sampler: mi.Sampler = mi.load_dict({"type": "independent"})
-    sampler.seed(0, N)
-    p = mi.Point3f(sampler.next_1d(), sampler.next_1d(), sampler.next_1d())
-
-    x = mi.Float(0.0, 1.0)
-    y = mi.Float(0.0, 1.0)
-    z = mi.Float(0.0, 1.0)
-    p = mi.Point3f(x, y, z)
-
-    grid = HashGrid(p, 2)
-
-    bin = grid.bin(mi.Point3f(0.6, 0.6, 0.6))
-
-    print(f"{bin.len()=}")
-    print(f"{bin.next()=}")
-    print(f"{bin.next()=}")
+    sampler.seed(0, 10)
+    gird = HashGrid(
+        mi.Point3f(sampler.next_1d(), sampler.next_1d(), sampler.next_1d()),
+        sampler.next_1d() * 0.01,
+        100,
+    )
+    # scene: mi.Scene = mi.load_dict(mi.cornell_box())
+    #
+    # integrator = SPPMIntegrator(mi.Properties())
+    #
+    # integrator.render(scene, scene.sensors()[0], 0, 1, True, True)
+    # mi.render(scene, integrator=integrator)
