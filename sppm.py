@@ -31,6 +31,70 @@ def cumsum(src: mi.UInt | mi.Float):
 
 
 class HashGrid:
+    def expand_sample(
+        self, sample: mi.Point3f, radius: mi.Float
+    ) -> tuple[mi.UInt, mi.UInt]:
+        initial_sample_size = dr.shape(sample)[-1]
+        pmin = self.to_grid(sample - mi.Vector3f(radius))
+        pmax = self.to_grid(sample + mi.Vector3f(radius)) + 1
+
+        grid_size: mi.Vector3u = pmax - pmin
+        bins_per_grid = grid_size.x * grid_size.y * grid_size.z
+        sample_size = dr.sum(bins_per_grid)[0]
+
+        dr.eval(bins_per_grid)
+        grid_offset = cumsum(bins_per_grid)
+        print(f"{grid_offset=}")
+        print(f"{bins_per_grid=}")
+
+        sample_idx = dr.zeros(mi.UInt, sample_size)
+        sample_h = dr.zeros(mi.UInt, sample_size)
+        inside = dr.zeros(mi.Bool, sample_size)
+
+        idx = mi.UInt(0)
+        dr.set_flag(dr.JitFlag.LoopRecord, False)
+        loop = mi.Loop("Bin Size", lambda: (idx,))
+
+        while loop(idx < bins_per_grid):
+            z = idx // grid_size.x * grid_size.y
+            y = idx % grid_size.z // grid_size.x
+            x = idx % grid_size.z % grid_size.y
+            p = mi.Point3u(x, y, z)
+            p = p - grid_size // 2 + pmin
+            h = hash(p, sample_size)
+            print(f"{sample_idx=}")
+            # print(f"{grid_offset + idx=}")
+            dr.scatter(
+                inside,
+                (p > 0) & (p < self.resolution),
+                grid_offset + idx,
+                idx < bins_per_grid,
+            )
+            dr.scatter(
+                sample_idx,
+                dr.arange(mi.UInt, initial_sample_size),
+                grid_offset + idx,
+                idx < bins_per_grid,
+            )
+            # print(f"{grid_offset+idx=}")
+            # dr.scatter(
+            #     sample_h,
+            #     h,
+            #     grid_offset + idx,
+            # )
+            idx += 1
+
+        print(f"{sample_size=}")
+        print(f"{dr.count(inside)=}")
+        print(f"{sample_idx=}")
+
+        idx = dr.compress(inside)
+        sample_h = dr.gather(mi.UInt, sample_h, idx)
+        sample_idx = dr.gather(mi.UInt, sample_idx, idx)
+
+        print(f"{sample_h=}")
+        return sample_idx, sample_h
+
     def __init__(self, sample: mi.Point3f, radius: mi.Float, resolution: int) -> None:
         """
         Constructs a 3D Hash Grid with the samples inserted.
@@ -40,109 +104,17 @@ class HashGrid:
         @param sample: Samples to insert into the Hash Grid
         @param resolution: The number of grid cells in each dimension
         """
-        hash_size = dr.shape(sample)[-1]
-        # self.hash_size = hash_size
+        # First expand samples
+
+        # hash_size = dr.shape(sample)[-1]
         self.resolution = resolution
         self.bbmin = mi.Point3f(dr.min(sample.x), dr.min(sample.y), dr.min(sample.z))
         self.bbmax = (
             mi.Point3f(dr.max(sample.x), dr.max(sample.y), dr.max(sample.z)) + 0.0001
         )
 
-        # bin_size = dr.zeros(mi.UInt, self.hash_size)
-
-        pmin = self.to_grid(sample - mi.Vector3f(radius))
-        pmax = self.to_grid(sample + mi.Vector3f(radius)) + 1
-        print(f"{pmin=}")
-        print(f"{pmax=}")
-
-        grid_size: mi.Vector3u = pmax - pmin
-        bins_per_grid = grid_size.x * grid_size.y * grid_size.z
-        sample_size = dr.sum(bins_per_grid)[0]
-
-        sample_idx = dr.arange(mi.UInt, sample_size)
-
-        dr.eval(bins_per_grid)
-        grid_offset = cumsum(bins_per_grid)
-
-        ref_idx = dr.zeros(mi.UInt, sample_size)
-        ref_h = dr.zeros(mi.UInt, sample_size)
-
-        bin_size = dr.zeros(mi.UInt, sample_size)
-        idx = mi.UInt(0)
-
-        loop = mi.Loop("Bin Size", lambda: (idx,))
-
-        while loop(idx < bins_per_grid):
-            z = idx // grid_size.x * grid_size.y
-            y = idx % grid_size.z // grid_size.x
-            x = idx % grid_size.z % grid_size.y
-            p = mi.Point3u(x, y, z)
-            h = hash(p, sample_size)
-            dr.scatter_reduce(dr.ReduceOp.Add, bin_size, 1, h)
-            dr.scatter(
-                ref_idx,
-                dr.arange(mi.UInt, hash_size),
-                # 1,
-                grid_offset + idx,
-            )
-            dr.scatter(
-                ref_h,
-                h,
-                grid_offset + idx,
-            )
-            idx += 1
-
-        dr.eval(bin_size)
-        bin_offset = cumsum(bin_size)
-        max_bin_size = dr.max(bin_size)[0]
-
-        # print(f"{bin_size=}")
-        # print(f"{bin_offset=}")
-        # print(f"{bins_per_grid=}")
-        # print(f"{ref_idx=}")
-        # print(f"{ref_h=}")
-        # print(f"{self.hash_size=}")
-
-        loop_record = dr.flag(dr.JitFlag.LoopRecord)
-        dr.set_flag(dr.JitFlag.LoopRecord, False)
-
-        depth = mi.UInt(0)
-        # ref_idx = dr.zeros(mi.UInt, self.hash_size)
-        sample_bin_offset = dr.gather(mi.UInt, bin_offset, ref_h)
-        sample_cell_cap = dr.gather(mi.UInt, bin_size, ref_h)
-        active_sample = dr.full(mi.Bool, True, sample_size)
-        sample_idx = dr.zeros(mi.UInt, sample_size)
-
-        loop = mi.Loop("Fill Bins", lambda: (depth))
-
-        loop.set_max_iterations(max_bin_size)
-
-        while loop(depth < max_bin_size):
-            dr.scatter_reduce(
-                dr.ReduceOp.Max,
-                sample_idx,
-                dr.arange(mi.UInt, sample_size),
-                depth + sample_bin_offset,
-                (depth < sample_bin_offset) & active_sample,
-            )
-            dr.eval(ref_idx)
-
-            selected_sample = dr.gather(
-                mi.UInt, sample_idx, depth + sample_bin_offset, depth < sample_cell_cap
-            )
-            is_selected_sample = dr.eq(selected_sample, ref_idx)
-            active_sample &= ~is_selected_sample
-
-        print(f"{bin_offset=}")
-        print(f"{sample_idx=}")
-
-        dr.set_flag(dr.JitFlag.LoopRecord, loop_record)
-        self.sample_idx = sample_idx
-        self.bin_offset = bin_offset
-        self.bin_size = bin_size
-        return
-
-        h = self.hash(sample)
+        ref_sample_idx, h = self.expand_sample(sample, radius)
+        sample_size = dr.shape(ref_sample_idx)[-1]
 
         """
         In order to calculate the offset for every bin we first calculate the
@@ -153,20 +125,16 @@ class HashGrid:
         Now querying the `bin_offset` array at position `h` gets the offset for the
         bin corresponding to that hash.
         """
-        bin_size = dr.zeros(mi.UInt, hash_size)
+        bin_size = dr.zeros(mi.UInt, sample_size)
         dr.scatter_reduce(dr.ReduceOp.Add, bin_size, 1, h)
         dr.eval(bin_size)
         bin_offset = cumsum(bin_size)  # This represents
 
         sample_bin_offset = dr.gather(mi.UInt, bin_offset, h)
 
-        ref_idx = dr.zeros(mi.UInt, hash_size)
+        sample_idx = dr.zeros(mi.UInt, sample_size)
         sample_cell_cap = dr.gather(mi.UInt, bin_size, h)
-        active_sample = dr.full(mi.Bool, True, hash_size)
-
-        depth = mi.UInt(0)
-
-        max_iterations = dr.max(bin_size)[0]
+        active_sample = dr.full(mi.Bool, True, sample_size)
 
         """
         In this loop we iterate through all cells in a bin and from high to low insert
@@ -177,29 +145,36 @@ class HashGrid:
         calling `dr.eval` on `sample_idx`.
         Therefore the loop cannot be a Dr.Jit loop.
         """
+
+        depth = mi.UInt(0)
+        max_depth = dr.max(bin_size)[0]
         loop_record = dr.flag(dr.JitFlag.LoopRecord)
         dr.set_flag(dr.JitFlag.LoopRecord, False)
-        for depth in range(max_iterations):
+
+        loop = mi.Loop("Fill bins", lambda: (depth))
+
+        while loop(depth < max_depth):
             dr.scatter_reduce(
                 dr.ReduceOp.Max,
-                ref_idx,
-                dr.arange(mi.UInt, hash_size),
+                sample_idx,
+                ref_sample_idx,
+                # dr.arange(mi.UInt, hash_size),
                 depth + sample_bin_offset,
                 (depth < sample_cell_cap) & active_sample,
             )
-            dr.eval(ref_idx)
+            dr.eval(sample_idx)
 
             selected_sample = dr.gather(
-                mi.UInt, ref_idx, depth + sample_bin_offset, depth < sample_cell_cap
+                mi.UInt, sample_idx, depth + sample_bin_offset, depth < sample_cell_cap
             )
-            is_selected_sample = dr.eq(selected_sample, dr.arange(mi.UInt, hash_size))
+            is_selected_sample = dr.eq(selected_sample, ref_sample_idx)
             active_sample &= ~is_selected_sample
 
         dr.set_flag(dr.JitFlag.LoopRecord, loop_record)
 
         self.__bin_size = bin_size
         self.__bin_offset = bin_offset
-        self.__sample_idx = ref_idx
+        self.__sample_idx = sample_idx
         self.__sample = sample
 
     def to_grid(self, p: mi.Point2f) -> mi.Point3u:
