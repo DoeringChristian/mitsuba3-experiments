@@ -14,16 +14,16 @@ def hash(p: mi.Point3u | mi.Point3f, hash_size: int):
 
 def cumsum(src: mi.UInt | mi.Float):
     N = dr.shape(src)[-1]
-    idx = dr.arange(mi.UInt, N)
+    # idx = dr.arange(mi.UInt, N)
     dst = dr.zeros(type(src), N)
     depth = mi.UInt(0)
 
-    loop = mi.Loop("cumsum", lambda: (idx, dst, depth))
+    loop = mi.Loop("cumsum", lambda: (dst, depth))
 
     loop.set_max_iterations(N)
 
-    while loop(depth < idx):
-        dst += dr.gather(mi.UInt, src, depth, depth < idx)
+    while loop(depth <= dr.arange(mi.UInt, N)):
+        dst += dr.gather(mi.UInt, src, depth, depth <= dr.arange(mi.UInt, N))
         depth += 1
 
     return dst
@@ -65,7 +65,28 @@ class HashGrid:
         bin_size = dr.zeros(mi.UInt, self.hash_size)
         dr.scatter_reduce(dr.ReduceOp.Add, bin_size, 1, h)
         dr.eval(bin_size)
-        bin_offset = cumsum(bin_size)  # This represents
+        cs = cumsum(bin_size)
+
+        """
+        Somewhat convoluted way to reindex the prefix sum (cs)
+        i.e.
+        bin_size = [1, 2, 3, 4, 5, 6, ...]
+        =>
+        cs = [1, 3, 6, 10, 15, 21, ...]
+        bin_offset = [0, 1, 3, 6, 10, 15, ...]
+        """
+
+        bin_offset = dr.select(
+            dr.arange(mi.UInt, len(bin_size)) == 0,
+            0,
+            dr.gather(
+                mi.UInt,
+                cs,
+                dr.arange(mi.UInt, len(bin_size)) - 1,
+                dr.arange(mi.UInt, len(bin_size)) > 0,
+            ),
+        )
+        # bin_offset = cumsum(bin_size)  # This represents
 
         sample_bin_offset = dr.gather(mi.UInt, bin_offset, h)
 
@@ -113,8 +134,8 @@ class HashGrid:
 
         dr.set_flag(dr.JitFlag.LoopRecord, loop_record)
 
-        self.__bin_size = bin_size
-        self.__bin_offset = bin_offset
+        self._bin_size = bin_size
+        self._bin_offset = bin_offset
         self.__sample_idx = sample_idx
         self.__sample = sample
 
@@ -124,24 +145,60 @@ class HashGrid:
             self.hash_size,
         )
 
+    def bin_dimension(self) -> mi.Vector3f:
+        return (self.bbmax - self.bbmin) / self.resolution
+
     def bin_offset(self, idx: mi.UInt) -> mi.UInt:
-        return dr.gather(mi.UInt, self.__bin_offset, idx)
+        return dr.gather(mi.UInt, self._bin_offset, idx)
 
     def bin_size(self, idx: mi.UInt) -> mi.UInt:
-        return dr.gather(mi.UInt, self.__bin_size, idx)
+        return dr.gather(mi.UInt, self._bin_size, idx)
 
     def sample_idx(self, idx: mi.UInt) -> mi.UInt:
         return dr.gather(mi.UInt, self.__sample_idx, idx)
 
+    def for_close(self, p: mi.Point3f, radius: mi.Float, func):
+        p_bin = (p - self.bbmin) / (self.bbmax - self.bbmin) * self.resolution
+        p_bin = mi.Point3u(mi.UInt(p_bin.x), mi.UInt(p_bin.y), mi.UInt(p_bin.z))
+        bin_dimension = self.bin_dimension()
+        print(f"{bin_dimension=}")
+        kernel_radius = mi.Vector3u(dr.ceil(radius / bin_dimension))
+        print(f"{kernel_radius=}")
+
+        kernel_size: mi.Vector3u = kernel_radius * 2 + 1
+        print(f"{kernel_size=}")
+
+        bins_per_kernel = kernel_size.x * kernel_size.y * kernel_size.z
+        print(f"{bins_per_kernel=}")
+
+        idx = mi.UInt(0)
+
+        dr.set_flag(dr.JitFlag.LoopRecord, False)
+        loop = mi.Loop("for_close", lambda: (idx))
+
+        while loop(idx < bins_per_kernel):
+            z = idx // kernel_size.x // kernel_size.y
+            y = idx % kernel_size.z // kernel_size.x
+            x = idx % kernel_size.z % kernel_size.y
+
+            pp = mi.Point3u(x, y, z) + p_bin - mi.Point3u(kernel_size) // 2
+            bin_idx = hash(pp, self.hash_size)
+
+            print(f"{self.bin_size(bin_idx)=}")
+
+            idx += 1
+
 
 if __name__ == "__main__":
-    N = 1_000_000
+    test = mi.UInt(1, 2, 3, 4, 5, 6)
+    print(f"{cumsum(test)=}")
+    N = 1000
 
     sampler: mi.Sampler = mi.load_dict({"type": "independent"})
     sampler.seed(0, N)
     p = mi.Point3f(sampler.next_1d(), sampler.next_1d(), sampler.next_1d())
 
-    grid = HashGrid(p, 100_000_000)
+    grid = HashGrid(p, 100)
     print("constructed!")
 
     idx = grid.bin_idx(mi.Point3f(0.1, 0.1, 0.1))
@@ -150,10 +207,15 @@ if __name__ == "__main__":
     print(f"{grid.bin_offset(idx)=}")
     print(f"{grid.bin_size(idx)=}")
 
-    sample_idx = grid.sample_idx(
-        grid.bin_offset(idx)[0] + dr.arange(mi.UInt, grid.bin_size(idx)[0])
-    )
+    print(f"{grid._bin_offset=}")
+    print(f"{grid._bin_size=}")
 
-    print(f"{sample_idx=}")
-    p = dr.gather(mi.Point3f, p, sample_idx)
-    print(f"{p=}")
+    grid.for_close(mi.Point3f(0.1, 0.1, 0.1), mi.Float(0.01), lambda: ())
+
+    # sample_idx = grid.sample_idx(
+    #     grid.bin_offset(idx)[0] + dr.arange(mi.UInt, grid.bin_size(idx)[0])
+    # )
+
+    # print(f"{sample_idx=}")
+    # p = dr.gather(mi.Point3f, p, sample_idx)
+    # print(f"{p=}")
