@@ -62,14 +62,14 @@ class HashGrid:
             p = mi.Point3u(x, y, z)
             p = p - grid_size // 2 + pmin
             h = hash(p, sample_size)
-            print(f"{sample_idx=}")
+            # print(f"{sample_idx=}")
             # print(f"{grid_offset + idx=}")
-            dr.scatter(
-                inside,
-                (p > 0) & (p < self.resolution),
-                grid_offset + idx,
-                idx < bins_per_grid,
-            )
+            # dr.scatter(
+            #     inside,
+            #     (p > 0) & (p < self.resolution),
+            #     grid_offset + idx,
+            #     idx < bins_per_grid,
+            # )
             dr.scatter(
                 sample_idx,
                 dr.arange(mi.UInt, initial_sample_size),
@@ -77,11 +77,11 @@ class HashGrid:
                 idx < bins_per_grid,
             )
             # print(f"{grid_offset+idx=}")
-            # dr.scatter(
-            #     sample_h,
-            #     h,
-            #     grid_offset + idx,
-            # )
+            dr.scatter(
+                sample_h,
+                h,
+                grid_offset + idx,
+            )
             idx += 1
 
         print(f"{sample_size=}")
