@@ -161,19 +161,15 @@ class HashGrid:
         p_bin = (p - self.bbmin) / (self.bbmax - self.bbmin) * self.resolution
         p_bin = mi.Point3u(mi.UInt(p_bin.x), mi.UInt(p_bin.y), mi.UInt(p_bin.z))
         bin_dimension = self.bin_dimension()
-        print(f"{bin_dimension=}")
         kernel_radius = mi.Vector3u(dr.ceil(radius / bin_dimension))
-        print(f"{kernel_radius=}")
 
         kernel_size: mi.Vector3u = kernel_radius * 2 + 1
-        print(f"{kernel_size=}")
 
         bins_per_kernel = kernel_size.x * kernel_size.y * kernel_size.z
-        print(f"{bins_per_kernel=}")
 
         idx = mi.UInt(0)
 
-        dr.set_flag(dr.JitFlag.LoopRecord, False)
+        dr.set_flag(dr.JitFlag.LoopRecord, True)
         loop = mi.Loop("for_close", lambda: (idx))
 
         while loop(idx < bins_per_kernel):
@@ -183,8 +179,16 @@ class HashGrid:
 
             pp = mi.Point3u(x, y, z) + p_bin - mi.Point3u(kernel_size) // 2
             bin_idx = hash(pp, self.hash_size)
+            bin_offset = self.bin_offset(bin_idx)
+            bin_size = self.bin_size(bin_idx)
 
-            print(f"{self.bin_size(bin_idx)=}")
+            idx2 = mi.UInt(0)
+            loop2 = mi.Loop("samples", lambda: (idx2))
+            while loop2(idx2 < bin_size):
+                sample_offset = bin_offset + idx2
+                sample_idx = dr.gather(mi.UInt, self.__sample_idx, sample_offset)
+                func(sample_idx)
+                idx2 += 1
 
             idx += 1
 
@@ -210,7 +214,13 @@ if __name__ == "__main__":
     print(f"{grid._bin_offset=}")
     print(f"{grid._bin_size=}")
 
-    grid.for_close(mi.Point3f(0.1, 0.1, 0.1), mi.Float(0.01), lambda: ())
+    tmp = mi.UInt(0, 0)
+    grid.for_close(
+        mi.Point3f(0.1, 0.1, 0.1),
+        mi.Float(0.01),
+        lambda idx: dr.scatter_reduce(dr.ReduceOp.Add, tmp, 1, 0),
+    )
+    print(f"{tmp=}")
 
     # sample_idx = grid.sample_idx(
     #     grid.bin_offset(idx)[0] + dr.arange(mi.UInt, grid.bin_size(idx)[0])
