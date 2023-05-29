@@ -169,7 +169,7 @@ class HashGrid:
 
         idx = mi.UInt(0)
 
-        dr.set_flag(dr.JitFlag.LoopRecord, True)
+        dr.set_flag(dr.JitFlag.LoopRecord, False)
         loop = mi.Loop("for_close", lambda: (idx))
 
         while loop(idx < bins_per_kernel):
@@ -214,12 +214,13 @@ if __name__ == "__main__":
     print(f"{grid._bin_offset=}")
     print(f"{grid._bin_size=}")
 
-    tmp = mi.UInt(0, 0)
+    tmp = dr.zeros(mi.UInt, N)
     grid.for_close(
         mi.Point3f(0.1, 0.1, 0.1),
         mi.Float(0.01),
-        lambda idx: dr.scatter_reduce(dr.ReduceOp.Add, tmp, 1, 0),
+        lambda idx: dr.scatter_reduce(dr.ReduceOp.Add, tmp, 1, idx),
     )
+    print(f"{dr.max(tmp)=}")
     print(f"{tmp=}")
 
     # sample_idx = grid.sample_idx(
