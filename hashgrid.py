@@ -73,9 +73,13 @@ class HashGrid:
         sample_cell_cap = dr.gather(mi.UInt, bin_size, h)
         active_sample = dr.full(mi.Bool, True, n_samples)
 
+        loop_record = dr.flag(dr.JitFlag.LoopRecord)
+        dr.set_flag(dr.JitFlag.LoopRecord, False)
         depth = mi.UInt(0)
+        max_depth = dr.max(bin_size)[0]
 
-        max_iterations = dr.max(bin_size)[0]
+        loop = mi.Loop("Fill Bins", lambda: (depth))
+        loop.set_max_iterations(max_depth)
 
         """
         In this loop we iterate through all cells in a bin and from high to low insert
@@ -86,7 +90,18 @@ class HashGrid:
         calling `dr.eval` on `sample_idx`.
         Therefore the loop cannot be a Dr.Jit loop.
         """
-        for depth in range(max_iterations):
+        while loop(depth < sample_cell_cap):
+            prev_inserted = dr.gather(
+                mi.UInt,
+                sample_idx,
+                depth + sample_bin_offset - 1,
+                depth < sample_cell_cap & (depth > 0),
+            )
+            is_inserted = dr.eq(prev_inserted, dr.arange(mi.UInt, n_samples)) & (
+                depth > 0
+            )
+            active_sample &= ~is_inserted
+
             dr.scatter_reduce(
                 dr.ReduceOp.Max,
                 sample_idx,
@@ -94,13 +109,9 @@ class HashGrid:
                 depth + sample_bin_offset,
                 (depth < sample_cell_cap) & active_sample,
             )
-            dr.eval(sample_idx)
+            depth += 1
 
-            selected_sample = dr.gather(
-                mi.UInt, sample_idx, depth + sample_bin_offset, depth < sample_cell_cap
-            )
-            is_selected_sample = dr.eq(selected_sample, dr.arange(mi.UInt, n_samples))
-            active_sample &= ~is_selected_sample
+        dr.set_flag(dr.JitFlag.LoopRecord, loop_record)
 
         self.__bin_size = bin_size
         self.__bin_offset = bin_offset
@@ -119,6 +130,9 @@ class HashGrid:
     def bin_size(self, idx: mi.UInt) -> mi.UInt:
         return dr.gather(mi.UInt, self.__bin_size, idx)
 
+    def sample_idx(self, idx: mi.UInt) -> mi.UInt:
+        return dr.gather(mi.UInt, self.__sample_idx, idx)
+
 
 if __name__ == "__main__":
     N = 100
@@ -127,14 +141,18 @@ if __name__ == "__main__":
     sampler.seed(0, N)
     p = mi.Point3f(sampler.next_1d(), sampler.next_1d(), sampler.next_1d())
 
-    x = mi.Float(0.0, 1.0, 0.5)
-    y = mi.Float(0.0, 1.0, 0.5)
-    z = mi.Float(0.0, 1.0, 0.5)
-    p = mi.Point3f(x, y, z)
+    grid = HashGrid(p, 2)
 
-    grid = HashGrid(p, 3)
+    idx = grid.bin_idx(mi.Point3f(0.1, 0.1, 0.1))
 
-    idx = grid.bin_idx(mi.Point3f(0.6, 0.6, 0.6))
     print(f"{idx=}")
     print(f"{grid.bin_offset(idx)=}")
     print(f"{grid.bin_size(idx)=}")
+
+    sample_idx = grid.sample_idx(
+        grid.bin_offset(idx)[0] + dr.arange(mi.UInt, grid.bin_size(idx)[0])
+    )
+
+    print(f"{sample_idx=}")
+    p = dr.gather(mi.Point3f, p, sample_idx)
+    print(f"{p=}")
