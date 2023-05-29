@@ -135,13 +135,14 @@ class HashGrid:
 
 
 if __name__ == "__main__":
-    N = 100
+    N = 1_000_000
 
     sampler: mi.Sampler = mi.load_dict({"type": "independent"})
     sampler.seed(0, N)
     p = mi.Point3f(sampler.next_1d(), sampler.next_1d(), sampler.next_1d())
 
-    grid = HashGrid(p, 2)
+    grid = HashGrid(p, 100_000_000)
+    print("constructed!")
 
     idx = grid.bin_idx(mi.Point3f(0.1, 0.1, 0.1))
 
