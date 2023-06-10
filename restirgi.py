@@ -96,7 +96,6 @@ class RestirReservoir:
 
 
 class PathIntegrator(mi.SamplingIntegrator):
-    # M_MAX = 500
     M_MAX = 500
     max_r = 10
     dist_threshold = 0.1
@@ -269,7 +268,6 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             dist = dr.norm(q_n.x_v - q.x_v)
             active = dist < self.dist_threshold
-            # active = mi.Bool(True)
             active &= dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
             active &= i < max_iter
 
