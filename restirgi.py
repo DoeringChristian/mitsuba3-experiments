@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
 mi.set_variant("cuda_ad_rgb")
+# dr.set_log_level(dr.LogLevel.Trace)
 
 
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
@@ -78,6 +79,9 @@ class RestirReservoir:
         active: mi.Bool = True,
     ):
         active = mi.Bool(active)
+        if dr.shape(active)[-1] == 1:
+            dr.make_opaque(active)
+
         self.w += dr.select(active, wnew, 0)
         self.M += dr.select(active, 1, 0)
         self.z = dr.select(active & (sampler.next_1d() < wnew / self.w), snew, self.z)
@@ -93,7 +97,7 @@ class RestirReservoir:
 
 class PathIntegrator(mi.SamplingIntegrator):
     # M_MAX = 500
-    M_MAX = 2000
+    M_MAX = 500
     max_r = 10
     dist_threshold = 0.1
     angle_threshold = 25 * dr.pi / 180
@@ -152,13 +156,12 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
 
         self.sample_initial(scene, sampler, sensor, sample_pos)
-        dr.schedule(self.initial_sample)
-        dr.eval()
+        dr.eval(self.initial_sample)
         self.temporal_resampling(sampler, idx)
-        dr.schedule(self.temporal_reservoir)
-        dr.eval()
+        dr.eval(self.temporal_reservoir)
         self.spatial_resampling(scene, sampler, pos)
-        dr.schedule(self.spatial_reservoir)
+        dr.eval(self.spatial_reservoir)
+
         results = self.render_final()
         dr.schedule(results)
         dr.eval()
@@ -547,6 +550,8 @@ if __name__ == "__main__":
             if img_acc is None:
                 img_acc = imgs[0]
             else:
-                img_acc = img_acc * float(i - 1) / float(i) + imgs[0] / i
+                img_acc = img_acc * dr.opaque(mi.Float, float(i - 1) / float(i)) + imgs[
+                    0
+                ] / dr.opaque(mi.Float, i)
 
             mi.util.write_bitmap(f"out/acc{i}.jpg", img_acc)
