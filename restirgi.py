@@ -35,6 +35,22 @@ def ray_from_to(a: mi.Point3f, b: mi.Point3f) -> mi.Ray3f:
     )
 
 
+class ReuseSet:
+    def __init__(self):
+        self.M = []
+        self.active = []
+        self.pos = []
+
+    def put(self, M: mi.UInt, pos: mi.Vector3f, active: mi.Bool):
+        self.M.append(M)
+        self.pos.append(pos)
+        self.active.append(active)
+
+    def __len__(self) -> int:
+        assert len(self.M) == len(self.pos) == len(self.active)
+        return len(self.M)
+
+
 class RestirSample:
     x_v: mi.Vector3f
     n_v: mi.Vector3f
@@ -84,7 +100,9 @@ class RestirReservoir:
 
         self.w += dr.select(active, wnew, 0)
         self.M += dr.select(active, 1, 0)
-        self.z = dr.select(active & (sampler.next_1d() < wnew / self.w), snew, self.z)
+        self.z: RestirSample = dr.select(
+            active & (sampler.next_1d() < wnew / self.w), snew, self.z
+        )
 
     def merge(
         self, sampler: mi.Sampler, r: "RestirReservoir", p, active: mi.Bool = True
@@ -98,6 +116,7 @@ class RestirReservoir:
 class PathIntegrator(mi.SamplingIntegrator):
     M_MAX = 500
     max_r = 10
+    # max_r = 3
     dist_threshold = 0.1
     angle_threshold = 25 * dr.pi / 180
 
@@ -105,6 +124,8 @@ class PathIntegrator(mi.SamplingIntegrator):
         super().__init__(props)
         self.max_depth: int = props.get("max_depth", 8)
         self.rr_depth: int = props.get("rr_depth", 2)
+        self.spatial_biased = props.get("spatial_biased", True)
+        self.jacobian = props.get("jacobian", True)
         self.n = 0
         self.film_size: None | mi.Vector2u = None
 
@@ -216,64 +237,33 @@ class PathIntegrator(mi.SamplingIntegrator):
     def spatial_resampling(
         self, scene: mi.Scene, sampler: mi.Sampler, pos: mi.Vector2u
     ):
-        R_s = self.spatial_reservoir
+        Rs = self.spatial_reservoir
 
-        max_iter = dr.select(R_s.M < self.M_MAX / 2, 9, 3)
+        max_iter = dr.select(Rs.M < self.M_MAX / 2, 9, 3)
 
         q: RestirSample = self.initial_sample
 
-        Q = [
-            mi.Vector3f(),
-            mi.Vector3f(),
-            mi.Vector3f(),
-            mi.Vector3f(),
-            mi.Vector3f(),
-            mi.Vector3f(),
-            mi.Vector3f(),
-            mi.Vector3f(),
-            mi.Vector3f(),
-        ]
-        Q_h = [
-            mi.UInt(),
-            mi.UInt(),
-            mi.UInt(),
-            mi.UInt(),
-            mi.UInt(),
-            mi.UInt(),
-            mi.UInt(),
-            mi.UInt(),
-            mi.UInt(),
-        ]
-        Q_active = [
-            mi.Bool(),
-            mi.Bool(),
-            mi.Bool(),
-            mi.Bool(),
-            mi.Bool(),
-            mi.Bool(),
-            mi.Bool(),
-            mi.Bool(),
-            mi.Bool(),
-        ]
+        Q = ReuseSet()
+        Q.put(Rs.M, q.x_s, mi.Bool(True))
 
-        Z = R_s.M
-        sum = R_s.M
-        for i in range(9):
+        for s in range(9):
+            active = s < max_iter
+
             offset = mi.warp.square_to_uniform_disk(sampler.next_2d()) * self.max_r
             p = dr.clamp(pos + mi.Vector2i(offset), mi.Point2u(0), self.film_size)
 
-            q_n: RestirSample = dr.gather(
+            qn: RestirSample = dr.gather(
                 RestirSample, self.initial_sample, self.to_idx(p)
             )
 
-            dist = dr.norm(q_n.x_v - q.x_v)
-            active = dist < self.dist_threshold
-            active &= dr.dot(q_n.n_v, q.n_v) > dr.cos(self.angle_threshold)
-            active &= i < max_iter
+            # Calculate similarity: Algorithm 4 l.7
+            dist = dr.norm(qn.x_v - q.x_v)
+            active &= dist < self.dist_threshold
+            active &= dr.dot(qn.n_v, q.n_v) > dr.cos(self.angle_threshold)
 
-            R_n: RestirReservoir = dr.gather(
+            Rn: RestirReservoir = dr.gather(
                 RestirReservoir, self.temporal_reservoir, self.to_idx(p), active
-            )
+            )  # l.9
 
             def J_rcp(q: RestirSample, r: RestirSample) -> mi.Float:
                 """
@@ -295,32 +285,33 @@ class PathIntegrator(mi.SamplingIntegrator):
                     div > 0.0, dr.abs(cos_psi_q) * dr.sqr(w_rq_len) / div, 0.0
                 )
 
-            shadowed = scene.ray_test(ray_from_to(R_n.z.x_s, q.x_v), active)
+            shadowed = scene.ray_test(ray_from_to(Rn.z.x_s, q.x_v), active)
 
             phat = dr.select(
                 ~active | shadowed,
                 0,
-                p_hat(R_n.z.L_o),  # * dr.clamp(J_rcp(R_n.z, q), 0.0, 1000.0),
-            )
-            # phat = dr.select(~active | shadowed, 0, p_hat(R_n.z.L_o))
+                p_hat(Rn.z.L_o)
+                * (dr.clamp(J_rcp(Rn.z, q), 1e-10, 1e20) if self.jacobian else 1.0),
+            )  # l.11 - 13
 
-            R_s.merge(sampler, R_n, phat, active)
+            Rs.merge(sampler, Rn, phat, active)
 
-            Q_h[i] = R_n.M
-            Q[i] = q_n.x_s
-            Q_active[i] = active
-            sum += R_n.M
+            Q.put(Rn.M, Rn.z.x_v, active)
 
-        phat_val = p_hat(R_s.z.L_o)
-        for i in range(len(Q)):
-            shadowed = scene.ray_test(ray_from_to(R_s.z.x_v, Q[i]), Q_active[i])
-            Z += dr.select(
-                ~shadowed & (phat_val > 0.0) & Q_active[i] & (i < max_iter), Q_h[i], 0
-            )
+        Z = mi.UInt(0)
+        phat = p_hat(Rs.z.L_o)
+        if self.spatial_biased:
+            Rs.W = dr.select(dr.eq(phat * Rs.M, 0), 0, Rs.w / (Rs.M * phat))
+        else:
+            for i in range(len(Q)):
+                active = Q.active[i]
+                active &= ~scene.ray_test(ray_from_to(Rs.z.x_s, Q.pos[i]), active)
+                Z += dr.select(active, Z + Q.M[i], 0)
+            Z += Rs.M
+            Rs.W = dr.select(Z * phat > 0, Rs.w / (Z * phat), 0.0)
 
-        R_s.M = dr.minimum(sum, self.M_MAX)
-        R_s.W = dr.select(dr.eq(phat_val * Z, 0), 0, R_s.w / (Z * phat_val))
-        self.spatial_reservoir = R_s
+        Rs.M = dr.clamp(Rs.M, 0, self.M_MAX)
+        self.spatial_reservoir = Rs
 
     def temporal_resampling(
         self,
@@ -531,6 +522,8 @@ if __name__ == "__main__":
         integrator: PathIntegrator = mi.load_dict(
             {
                 "type": "path_test",
+                "jacobian": False,
+                "spatial_biased": True,
             }
         )
 
@@ -539,7 +532,7 @@ if __name__ == "__main__":
 
         img_acc = None
 
-        for i in range(50):
+        for i in range(200):
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
