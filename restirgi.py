@@ -128,6 +128,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         self.rr_depth: int = props.get("rr_depth", 2)
         self.spatial_biased = props.get("spatial_biased", True)
         self.jacobian = props.get("jacobian", True)
+        self.bsdf_sampling = props.get("bsdf_sampling", True)
         self.n = 0
         self.film_size: None | mi.Vector2u = None
 
@@ -357,16 +358,26 @@ class PathIntegrator(mi.SamplingIntegrator):
         S.n_v = si.n
         S.valid = si.is_valid()
 
-        bsdf_sample, bsdf_weight = bsdf.sample(
-            mi.BSDFContext(), si, sampler.next_1d(), sampler.next_2d()
-        )
+        if self.bsdf_sampling:
+            bsdf_sample, bsdf_weight = bsdf.sample(
+                mi.BSDFContext(), si, sampler.next_1d(), sampler.next_2d()
+            )
 
-        S.p_q = bsdf_sample.pdf
+            wo = bsdf_sample.wo
+            pdf = bsdf_sample.pdf
+            bsdf_value = (
+                bsdf_weight * pdf
+            )  # have to retreive the bsdf_value from the bsdf_weight
+        else:
+            wo = mi.warp.square_to_uniform_hemisphere(sampler.next_2d())
+            pdf = mi.warp.square_to_uniform_hemisphere_pdf(wo)
+            bsdf_value = bsdf.eval(mi.BSDFContext(), si, wo)
 
-        bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
-        S.f = bsdf_weight * bsdf_sample.pdf
+        S.p_q = pdf
 
-        ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
+        S.f = bsdf_value
+
+        ray = si.spawn_ray(si.to_world(wo))
 
         S.L_o = self.sample_ray(scene, sampler, ray)
 
@@ -527,8 +538,9 @@ if __name__ == "__main__":
         integrator: PathIntegrator = mi.load_dict(
             {
                 "type": "path_test",
-                "jacobian": True,
-                "spatial_biased": False,
+                "jacobian": False,
+                "spatial_biased": True,
+                "bsdf_sampling": True,
             }
         )
 
