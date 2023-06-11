@@ -39,15 +39,17 @@ class ReuseSet:
     def __init__(self):
         self.M = []
         self.active = []
-        self.pos = []
+        self.p = []
+        self.n = []
 
-    def put(self, M: mi.UInt, pos: mi.Vector3f, active: mi.Bool):
+    def put(self, M: mi.UInt, pos: mi.Vector3f, n: mi.Vector3f, active: mi.Bool):
         self.M.append(M)
-        self.pos.append(pos)
+        self.p.append(pos)
+        self.n.append(n)
         self.active.append(active)
 
     def __len__(self) -> int:
-        assert len(self.M) == len(self.pos) == len(self.active)
+        assert len(self.M) == len(self.p) == len(self.active) == len(self.n)
         return len(self.M)
 
 
@@ -244,7 +246,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         q: RestirSample = self.initial_sample
 
         Q = ReuseSet()
-        Q.put(Rs.M, q.x_s, mi.Bool(True))
+        Q.put(Rs.M, q.x_v, q.n_v, mi.Bool(True))
 
         for s in range(9):
             active = s < max_iter
@@ -291,23 +293,26 @@ class PathIntegrator(mi.SamplingIntegrator):
                 ~active | shadowed,
                 0,
                 p_hat(Rn.z.L_o)
-                * (dr.clamp(J_rcp(Rn.z, q), 1e-10, 1e20) if self.jacobian else 1.0),
+                * (dr.clamp(J_rcp(Rn.z, q), 0.1, 10.0) if self.jacobian else 1.0),
             )  # l.11 - 13
 
             Rs.merge(sampler, Rn, phat, active)
 
-            Q.put(Rn.M, Rn.z.x_v, active)
+            Q.put(Rn.M, Rn.z.x_v, Rn.z.n_v, active)
 
-        Z = mi.UInt(0)
+        Z = mi.Float(0)
         phat = p_hat(Rs.z.L_o)
         if self.spatial_biased:
             Rs.W = dr.select(dr.eq(phat * Rs.M, 0), 0, Rs.w / (Rs.M * phat))
         else:
             for i in range(len(Q)):
                 active = Q.active[i]
-                active &= ~scene.ray_test(ray_from_to(Rs.z.x_s, Q.pos[i]), active)
-                Z += dr.select(active, Z + Q.M[i], 0)
-            Z += Rs.M
+                ray = ray_from_to(Rs.z.x_s, Q.p[i])
+                active &= dr.dot(ray.d, Q.n[i]) < 0
+                active &= ~scene.ray_test(ray, active)
+
+                Z += dr.select(active, Q.M[i], 0)
+
             Rs.W = dr.select(Z * phat > 0, Rs.w / (Z * phat), 0.0)
 
         Rs.M = dr.clamp(Rs.M, 0, self.M_MAX)
@@ -523,7 +528,7 @@ if __name__ == "__main__":
             {
                 "type": "path_test",
                 "jacobian": False,
-                "spatial_biased": True,
+                "spatial_biased": False,
             }
         )
 
@@ -532,7 +537,7 @@ if __name__ == "__main__":
 
         img_acc = None
 
-        for i in range(200):
+        for i in range(50):
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
