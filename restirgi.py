@@ -116,7 +116,8 @@ class RestirReservoir:
 
 
 class PathIntegrator(mi.SamplingIntegrator):
-    M_MAX = 500
+    M_MAX = 1000000
+    # M_MAX = 500
     max_r = 10
     # max_r = 3
     dist_threshold = 0.1
@@ -241,6 +242,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         self, scene: mi.Scene, sampler: mi.Sampler, pos: mi.Vector2u
     ):
         Rs = self.spatial_reservoir
+        # Rs.M = dr.clamp(Rs.M, 0, self.M_MAX)
 
         max_iter = dr.select(Rs.M < self.M_MAX / 2, 9, 3)
 
@@ -316,7 +318,6 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             Rs.W = dr.select(Z * phat > 0, Rs.w / (Z * phat), 0.0)
 
-        Rs.M = dr.clamp(Rs.M, 0, self.M_MAX)
         self.spatial_reservoir = Rs
 
     def temporal_resampling(
