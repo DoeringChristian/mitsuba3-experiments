@@ -544,7 +544,7 @@ if __name__ == "__main__":
         # scene["sensor"]["sampler"] = {"type": "multijitter"}
         print(f"{scene=}")
         scene: mi.Scene = mi.load_dict(scene)
-        scene = mi.load_file("./data/scenes/fence/scene.xml")
+        # scene = mi.load_file("./data/scenes/fence/scene.xml")
         # params = mi.traverse(scene)
         # print(f"{params=}")
 
