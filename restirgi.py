@@ -359,7 +359,7 @@ class PathIntegrator(mi.SamplingIntegrator):
 
         phat = p_hat(Rnew.z.L_o)
         Rnew.W = dr.select(
-            phat * Rnew.M > 0, R.w / (Rnew.M * phat), 0
+            phat * Rnew.M > 0, Rnew.w / (Rnew.M * phat), 0
         )  # Update Contribution Weight W in Rnew
 
         self.temporal_reservoir = Rnew
