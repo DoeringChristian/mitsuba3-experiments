@@ -350,21 +350,17 @@ class PathIntegrator(mi.SamplingIntegrator):
         Rnew: RestirReservoir = dr.zeros(RestirReservoir)
 
         phat = p_hat(S.L_o)
-        w = phat / S.p_q
+        w = dr.select(S.p_q > 0, phat / S.p_q, 0.0)  # Weight for new sample
+
         Rnew.update(sampler, S, w)
-        Rnew.W = dr.select(phat > 0, Rnew.w / (Rnew.M * phat), 0)
 
-        # Rnew.merge(sampler, R, phat)
-        Rt: RestirReservoir = dr.zeros(RestirReservoir)
-        Rt.merge(sampler, Rnew, phat)
+        Rnew.merge(sampler, R, p_hat(R.z.L_o))
 
-        Rt.merge(sampler, R, p_hat(R.z.L_o))
+        phat = p_hat(Rnew.z.L_o)
 
-        phat = p_hat(Rt.z.L_o)
-        Rt.W = dr.select(phat * Rt.M > 0, R.w / (Rt.M * phat), 0)
-        Rt.M = dr.minimum(30, Rt.M)
-
-        self.temporal_reservoir = Rt
+        Rnew.W = dr.select(phat * Rnew.M > 0, R.w / (Rnew.M * phat), 0)
+        Rnew.M = dr.minimum(30, Rnew.M)
+        self.temporal_reservoir = Rnew
 
     def sample_initial(
         self,
