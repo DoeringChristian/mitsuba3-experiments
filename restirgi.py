@@ -347,22 +347,25 @@ class PathIntegrator(mi.SamplingIntegrator):
         S = self.initial_sample
         R = self.temporal_reservoir
 
-        # p = self.prev_sensor_mat @ mi.Point3f(S.x_v)
-        # p = mi.Point2f(p.x, p.y) * self.film_size
-        # prev_idx = self.to_idx(mi.Vector2u(p))
-        # S_prev: RestirSample = dr.gather(
-        #     type(self.initial_sample), self.initial_sample, prev_idx
-        # )
-        # valid = (dr.norm(S.x_v - S_prev.x_v) < 0.1) & (dr.dot(S.n_v, S_prev.n_v) > 0.8)
-        #
-        # R = dr.select(valid, R, dr.zeros(RestirReservoir))
+        Rnew: RestirReservoir = dr.zeros(RestirReservoir)
 
-        w = dr.select(dr.eq(S.p_q, 0), 0, p_hat(S.L_o) / S.p_q)
-        R.update(sampler, S, w)
-        phat = p_hat(R.z.L_o)
-        R.W = dr.select(dr.eq(phat * R.M, 0), 0, R.w / (R.M * phat))
+        phat = p_hat(S.L_o)
+        w = phat / S.p_q
+        Rnew.update(sampler, S, w)
+        Rnew.W = dr.select(phat > 0, Rnew.w / (Rnew.M * phat), 0)
 
-        self.temporal_reservoir = R
+        # Rnew.merge(sampler, R, phat)
+        Rt: RestirReservoir = dr.zeros(RestirReservoir)
+        Rt.merge(sampler, Rnew, phat)
+        # Rt.merge(sampler, R, p_hat(R.z.L_o))
+        Rt.update(sampler, R.z, R.M * R.W * p_hat(R.z.L_o))
+        M = R.M
+
+        phat = p_hat(Rt.z.L_o)
+        Rt.M = dr.minimum(M + 1, 30)
+        Rt.W = dr.select(phat * M > 0, R.w / (M * phat), 0)
+
+        self.temporal_reservoir = Rt
 
     def sample_initial(
         self,
@@ -587,7 +590,7 @@ if __name__ == "__main__":
             # params["PerspectiveCamera.to_world"] @= mi.ScalarTransform4f.translate(
             #     [0.01, 0, 0]
             # )
-            params.update()
+            # params.update()
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
