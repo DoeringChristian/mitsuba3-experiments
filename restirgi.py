@@ -111,7 +111,7 @@ class RestirReservoir:
         self, sampler: mi.Sampler, r: "RestirReservoir", p, active: mi.Bool = True
     ):
         active = mi.Bool(active)
-        M0 = self.M
+        M0 = mi.UInt(self.M)
         self.update(sampler, r.z, p * r.W * r.M, active)
         self.M = dr.select(active, M0 + r.M, M0)
 
@@ -356,14 +356,18 @@ class PathIntegrator(mi.SamplingIntegrator):
 
         # Rnew.merge(sampler, R, phat)
         Rt: RestirReservoir = dr.zeros(RestirReservoir)
+        print(f"{Rnew.M=}")
+        print(f"{Rt.M=}")
         Rt.merge(sampler, Rnew, phat)
-        # Rt.merge(sampler, R, p_hat(R.z.L_o))
-        Rt.update(sampler, R.z, R.M * R.W * p_hat(R.z.L_o))
-        M = R.M
+        print(f"{Rt.M=}")
 
+        Rt.merge(sampler, R, p_hat(R.z.L_o))
+
+        # Rt.update(sampler, R.z, R.M * R.W * p_hat(R.z.L_o))
+        # M = R.M
         phat = p_hat(Rt.z.L_o)
-        Rt.M = dr.minimum(M + 1, 30)
-        Rt.W = dr.select(phat * M > 0, R.w / (M * phat), 0)
+        # Rt.M = dr.minimum(M + 1, 30)
+        Rt.W = dr.select(phat * Rt.M > 0, R.w / (Rt.M * phat), 0)
 
         self.temporal_reservoir = Rt
 
@@ -585,7 +589,7 @@ if __name__ == "__main__":
 
         img_acc = None
 
-        for i in range(50):
+        for i in range(200):
             # params["red-wall.to_world"] @= mi.Transform4f.translate([0.00, 0.00, 0.01])
             # params["PerspectiveCamera.to_world"] @= mi.ScalarTransform4f.translate(
             #     [0.01, 0, 0]
