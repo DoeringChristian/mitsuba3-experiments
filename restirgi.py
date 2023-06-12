@@ -177,14 +177,14 @@ class PathIntegrator(mi.SamplingIntegrator):
             self.spatial_reservoir: RestirReservoir = dr.zeros(
                 RestirReservoir, wavefront_size
             )
-            self.search_radius = dr.full(mi.Float, 10, wavefront_size)
+            self.search_radius = dr.full(mi.Float, 10.0, wavefront_size)
 
         self.sample_initial(scene, sampler, sensor, sample_pos)
         dr.eval(self.initial_sample)
         self.temporal_resampling(sampler, idx)
         dr.eval(self.temporal_reservoir)
         self.spatial_resampling(scene, sampler, pos)
-        dr.eval(self.spatial_reservoir)
+        dr.eval(self.spatial_reservoir, self.search_radius)
 
         results = self.render_final()
         dr.schedule(results)
@@ -251,6 +251,8 @@ class PathIntegrator(mi.SamplingIntegrator):
         Q = ReuseSet()
         Q.put(Rs.M, q.x_v, q.n_v, mi.Bool(True))
 
+        any_reused = dr.full(mi.Bool, False, len(pos.x))
+
         for s in range(9):
             active = s < max_iter
 
@@ -305,6 +307,8 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             Q.put(Rn.M, Rn.z.x_v, Rn.z.n_v, active)
 
+            any_reused |= active
+
         Z = mi.Float(0)
         phat = p_hat(Rs.z.L_o)
         if self.spatial_biased:
@@ -321,8 +325,9 @@ class PathIntegrator(mi.SamplingIntegrator):
             Rs.W = dr.select(Z * phat > 0, Rs.w / (Z * phat), 0.0)
 
         # Decrease search radius:
+        # dr.make_opaque(self.search_radius, any_reused)
         self.search_radius = dr.maximum(
-            dr.select(Q.count > 0, self.search_radius, self.search_radius / 2),
+            dr.select(any_reused, self.search_radius, self.search_radius / 2),
             3,
         )
 
@@ -539,7 +544,9 @@ if __name__ == "__main__":
         # scene["sensor"]["sampler"] = {"type": "multijitter"}
         print(f"{scene=}")
         scene: mi.Scene = mi.load_dict(scene)
-        # scene = mi.load_file("data/veach-ajar/scene.xml")
+        scene = mi.load_file("./data/scenes/fence/scene.xml")
+        # params = mi.traverse(scene)
+        # print(f"{params=}")
 
         ref = mi.render(scene, spp=50 * 4)
         mi.util.write_bitmap("out/ref.jpg", ref)
@@ -559,6 +566,10 @@ if __name__ == "__main__":
         img_acc = None
 
         for i in range(50):
+            # params["PerspectiveCamera.to_world"] @= mi.ScalarTransform4f.translate(
+            #     [0.00, 0, 0]
+            # )
+            # params.update()
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
