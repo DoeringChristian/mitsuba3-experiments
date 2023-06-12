@@ -118,7 +118,6 @@ class RestirReservoir:
 class PathIntegrator(mi.SamplingIntegrator):
     M_MAX = 1000000
     # M_MAX = 500
-    max_r = 10
     # max_r = 3
     dist_threshold = 0.1
     angle_threshold = 25 * dr.pi / 180
@@ -178,6 +177,7 @@ class PathIntegrator(mi.SamplingIntegrator):
             self.spatial_reservoir: RestirReservoir = dr.zeros(
                 RestirReservoir, wavefront_size
             )
+            self.search_radius = dr.full(mi.Float, 10, wavefront_size)
 
         self.sample_initial(scene, sampler, sensor, sample_pos)
         dr.eval(self.initial_sample)
@@ -254,7 +254,9 @@ class PathIntegrator(mi.SamplingIntegrator):
         for s in range(9):
             active = s < max_iter
 
-            offset = mi.warp.square_to_uniform_disk(sampler.next_2d()) * self.max_r
+            offset = (
+                mi.warp.square_to_uniform_disk(sampler.next_2d()) * self.search_radius
+            )
             p = dr.clamp(pos + mi.Vector2i(offset), mi.Point2u(0), self.film_size)
 
             qn: RestirSample = dr.gather(
@@ -317,6 +319,12 @@ class PathIntegrator(mi.SamplingIntegrator):
                 Z += dr.select(active, Q.M[i], 0)
 
             Rs.W = dr.select(Z * phat > 0, Rs.w / (Z * phat), 0.0)
+
+        # Decrease search radius:
+        self.search_radius = dr.maximum(
+            dr.select(Q.count > 0, self.search_radius, self.search_radius / 2),
+            3,
+        )
 
         self.spatial_reservoir = Rs
 
