@@ -3,6 +3,7 @@ import drjit as dr
 import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
+import reproject
 
 mi.set_variant("cuda_ad_rgb")
 # dr.set_log_level(dr.LogLevel.Trace)
@@ -133,6 +134,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         self.film_size: None | mi.Vector2u = None
 
     def to_idx(self, pos: mi.Vector2u) -> mi.UInt:
+        pos = dr.clamp(pos, mi.Point2u(0), self.film_size)
         assert self.film_size is not None
         return pos.y * self.film_size.x + pos.x
 
@@ -179,6 +181,8 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
             self.search_radius = dr.full(mi.Float, 10.0, wavefront_size)
 
+            self.prev_sensor_mat = reproject.w2c(sensor)
+
         self.sample_initial(scene, sampler, sensor, sample_pos)
         dr.eval(self.initial_sample)
         self.temporal_resampling(sampler, idx)
@@ -208,7 +212,9 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             imgs.append(img)
 
+        # Update n and prev_sensor_params
         self.n += 1
+        self.prev_sensor_mat = reproject.w2c(sensor)
 
         return imgs
 
@@ -340,6 +346,16 @@ class PathIntegrator(mi.SamplingIntegrator):
     ):
         S = self.initial_sample
         R = self.temporal_reservoir
+
+        # p = self.prev_sensor_mat @ mi.Point3f(S.x_v)
+        # p = mi.Point2f(p.x, p.y) * self.film_size
+        # prev_idx = self.to_idx(mi.Vector2u(p))
+        # S_prev: RestirSample = dr.gather(
+        #     type(self.initial_sample), self.initial_sample, prev_idx
+        # )
+        # valid = (dr.norm(S.x_v - S_prev.x_v) < 0.1) & (dr.dot(S.n_v, S_prev.n_v) > 0.8)
+        #
+        # R = dr.select(valid, R, dr.zeros(RestirReservoir))
 
         w = dr.select(dr.eq(S.p_q, 0), 0, p_hat(S.L_o) / S.p_q)
         R.update(sampler, S, w)
@@ -544,6 +560,7 @@ if __name__ == "__main__":
         # scene["sensor"]["sampler"] = {"type": "multijitter"}
         print(f"{scene=}")
         scene: mi.Scene = mi.load_dict(scene)
+
         # scene = mi.load_file("./data/scenes/fence/scene.xml")
         # params = mi.traverse(scene)
         # print(f"{params=}")
@@ -566,10 +583,11 @@ if __name__ == "__main__":
         img_acc = None
 
         for i in range(50):
+            # params["red-wall.to_world"] @= mi.Transform4f.translate([0.00, 0.00, 0.01])
             # params["PerspectiveCamera.to_world"] @= mi.ScalarTransform4f.translate(
-            #     [0.00, 0, 0]
+            #     [0.01, 0, 0]
             # )
-            # params.update()
+            params.update()
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
