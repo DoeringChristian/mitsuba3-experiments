@@ -8,7 +8,7 @@ mi.set_variant("cuda_ad_rgb")
 import restirgi
 
 if __name__ == "__main__":
-    n_iterations = 70
+    n_iterations = 100
     spp = 4
 
     scene = mi.cornell_box()
@@ -23,7 +23,7 @@ if __name__ == "__main__":
         {
             "type": "restirgi",
             "jacobian": True,
-            "spatial_biased": False,
+            "spatial_biased": True,
             "bsdf_sampling": True,
             "max_M_spatial": 500,
             "max_M_temporal": 30,
@@ -34,7 +34,7 @@ if __name__ == "__main__":
         {
             "type": "restirgi",
             "jacobian": False,
-            "spatial_biased": False,
+            "spatial_biased": True,
             "bsdf_sampling": True,
             "max_M_spatial": 500,
             "max_M_temporal": 30,
@@ -42,20 +42,24 @@ if __name__ == "__main__":
     )
 
     var_jacobian = []
+    bias_jacobian = []
 
     print("Jacobian Bias Corrected:")
     for i in tqdm(range(n_iterations)):
         img = mi.render(scene, integrator=jacobian, seed=i, spp=spp)
         var_jacobian.append(dr.mean_nested(dr.sqr(img - dr.mean_nested(img)))[0])
+        bias_jacobian.append(dr.mean_nested(ref - img)[0])
 
     img_jacobian = img
 
     var_nonjacobian = []
+    bias_nonjacobian = []
 
     print("Non Jacobian Bias Corrected:")
     for i in tqdm(range(n_iterations)):
         img = mi.render(scene, integrator=nonjacobian, seed=i, spp=spp)
         var_nonjacobian.append(dr.mean_nested(dr.sqr(img - dr.mean_nested(img)))[0])
+        bias_nonjacobian.append(dr.mean_nested(ref - img)[0])
 
     img_nonjacobian = img
 
@@ -66,8 +70,8 @@ if __name__ == "__main__":
     ax[0][0].imshow(mi.util.convert_to_bitmap(ref))
     ax[0][0].set_title("ref")
 
-    ax[0][1].plot(var_jacobian, label="Jacobian Bias Correction")
-    ax[0][1].plot(var_nonjacobian, label="No Jacobian Bias Correction")
+    ax[0][1].plot(bias_jacobian, label="Jacobian Bias Correction")
+    ax[0][1].plot(bias_nonjacobian, label="No Jacobian Bias Correction")
     ax[0][1].legend(loc="best")
 
     ax[1][0].axis("off")

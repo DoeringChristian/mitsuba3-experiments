@@ -299,7 +299,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         Z = mi.Float(0)
         phat = p_hat(Rnew.z.L_o)
         if self.spatial_biased:
-            Rnew.W = dr.select(dr.eq(phat * Rnew.M, 0), 0, Rnew.w / (Rnew.M * phat))
+            Rnew.W = dr.select(phat * Rnew.M > 0, Rnew.w / (Rnew.M * phat), 0)
         else:
             for i in range(len(Q)):
                 active = Q.active[i]
