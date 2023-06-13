@@ -22,20 +22,6 @@ def p_hat(f):
     return dr.norm(f)
 
 
-def ray_from_to(a: mi.Point3f, b: mi.Point3f) -> mi.Ray3f:
-    # epsilon = dr.epsilon(mi.Point3f)
-    epsilon = 0.0001
-    maxt = dr.norm(b - a)
-    d = (b - a) / maxt
-    return mi.Ray3f(
-        a + epsilon * d,
-        d,
-        maxt=maxt - epsilon * 2,
-        time=0,
-        wavelengths=[],
-    )
-
-
 class ReuseSet:
     def __init__(self):
         self.M = []
@@ -314,7 +300,10 @@ class PathIntegrator(mi.SamplingIntegrator):
                     div > 0, dr.abs(cos_psi_q) * dr.sqr(w_qr_len) / div, 0.0
                 )
 
-            shadowed = scene.ray_test(ray_from_to(Rn.z.x_s, q.x_v), active)
+            si: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
+            si.p = q.x_v
+            si.n = q.n_v
+            shadowed = scene.ray_test(si.spawn_ray_to(Rn.z.x_s), active)
 
             phat = dr.select(
                 ~active | shadowed,
