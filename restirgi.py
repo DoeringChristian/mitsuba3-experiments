@@ -274,7 +274,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         q: RestirSample = self.sample
 
         Q = ReuseSet()
-        Q.put(Rs.M, q.x_v, q.n_v, mi.Bool(True))
+        Q.put(Rnew.M, Rnew.z.x_s, Rnew.z.n_s, mi.Bool(True))
 
         any_reused = dr.full(mi.Bool, False, len(pos.x))
 
@@ -325,7 +325,7 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             Rnew.merge(sampler, Rn, phat, active)
 
-            Q.put(Rn.M, qn.x_s, qn.n_s, active)
+            Q.put(Rn.M, Rn.z.x_s, Rn.z.n_s, active)
 
             any_reused |= active
 
