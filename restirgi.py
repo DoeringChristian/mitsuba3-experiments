@@ -130,6 +130,8 @@ class PathIntegrator(mi.SamplingIntegrator):
         self.spatial_biased = props.get("spatial_biased", True)
         self.jacobian = props.get("jacobian", True)
         self.bsdf_sampling = props.get("bsdf_sampling", True)
+        self.max_M_temporal = props.get("max_M_temporal", None)
+        self.max_M_spatial = props.get("max_M_spatial", None)
         self.n = 0
         self.film_size: None | mi.Vector2u = None
 
@@ -248,7 +250,13 @@ class PathIntegrator(mi.SamplingIntegrator):
         self, scene: mi.Scene, sampler: mi.Sampler, pos: mi.Vector2u
     ):
         Rs = self.spatial_reservoir
-        # Rs.M = dr.clamp(Rs.M, 0, self.M_MAX)
+
+        """
+        Create a new reservoir to merge the spatial reservoirs into.
+        This is neccesary so we can clamp M.
+        """
+        Rnew: RestirReservoir = dr.zeros(RestirReservoir)
+        Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o))
 
         max_iter = dr.select(Rs.M < self.M_MAX / 2, 9, 3)
 
@@ -309,16 +317,17 @@ class PathIntegrator(mi.SamplingIntegrator):
                 * (dr.clamp(J_rcp(Rn.z, q), 0.0001, 10000.0) if self.jacobian else 1.0),
             )  # l.11 - 13
 
-            Rs.merge(sampler, Rn, phat, active)
+            Rnew.merge(sampler, Rn, phat, active)
+            # Rs.merge(sampler, Rn, phat, active)
 
             Q.put(Rn.M, Rn.z.x_v, Rn.z.n_v, active)
 
             any_reused |= active
 
         Z = mi.Float(0)
-        phat = p_hat(Rs.z.L_o)
+        phat = p_hat(Rnew.z.L_o)
         if self.spatial_biased:
-            Rs.W = dr.select(dr.eq(phat * Rs.M, 0), 0, Rs.w / (Rs.M * phat))
+            Rnew.W = dr.select(dr.eq(phat * Rnew.M, 0), 0, Rnew.w / (Rnew.M * phat))
         else:
             for i in range(len(Q)):
                 active = Q.active[i]
@@ -328,7 +337,7 @@ class PathIntegrator(mi.SamplingIntegrator):
 
                 Z += dr.select(active, Q.M[i], 0)
 
-            Rs.W = dr.select(Z * phat > 0, Rs.w / (Z * phat), 0.0)
+            Rnew.W = dr.select(Z * phat > 0, Rnew.w / (Z * phat), 0.0)
 
         # Decrease search radius:
         # dr.make_opaque(self.search_radius, any_reused)
@@ -337,7 +346,10 @@ class PathIntegrator(mi.SamplingIntegrator):
             3,
         )
 
-        self.spatial_reservoir = Rs
+        if self.max_M_spatial is not None:
+            Rnew.M = dr.minimum(Rnew.M, self.max_M_spatial)
+
+        self.spatial_reservoir = Rnew
 
     def temporal_resampling(
         self,
@@ -347,8 +359,10 @@ class PathIntegrator(mi.SamplingIntegrator):
         S = self.initial_sample
         R = self.temporal_reservoir
 
-        R.M = dr.minimum(30, R.M)
-
+        """
+        Create a new reservoir to update with the new sample and merge the old temporal reservoir into.
+        This is necesarry to limit the samples in the old temporal reservoir.
+        """
         Rnew: RestirReservoir = dr.zeros(RestirReservoir)
 
         phat = p_hat(S.L_o)
@@ -361,6 +375,9 @@ class PathIntegrator(mi.SamplingIntegrator):
         Rnew.W = dr.select(
             phat * Rnew.M > 0, Rnew.w / (Rnew.M * phat), 0
         )  # Update Contribution Weight W in Rnew
+
+        if self.max_M_temporal is not None:
+            Rnew.M = dr.minimum(Rnew.M, self.max_M_temporal)
 
         self.temporal_reservoir = Rnew
 
@@ -574,6 +591,8 @@ if __name__ == "__main__":
                 "jacobian": False,
                 "spatial_biased": True,
                 "bsdf_sampling": True,
+                "max_M_spatial": 500,
+                "max_M_temporal": 30,
             }
         )
 
