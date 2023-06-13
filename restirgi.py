@@ -136,7 +136,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         self.film_size: None | mi.Vector2u = None
 
     def to_idx(self, pos: mi.Vector2u) -> mi.UInt:
-        pos = dr.clamp(pos, mi.Point2u(0), self.film_size)
+        pos = dr.clamp(mi.Point2u(pos), mi.Point2u(0), self.film_size)
         assert self.film_size is not None
         return pos.y * self.film_size.x + pos.x
 
@@ -598,8 +598,8 @@ if __name__ == "__main__":
         scene: mi.Scene = mi.load_dict(scene)
 
         # scene = mi.load_file("./data/scenes/fence/scene.xml")
-        # params = mi.traverse(scene)
-        # print(f"{params=}")
+        params = mi.traverse(scene)
+        print(f"{params=}")
 
         ref = mi.render(scene, spp=50 * 4)
         mi.util.write_bitmap("out/ref.jpg", ref)
@@ -621,11 +621,11 @@ if __name__ == "__main__":
         img_acc = None
 
         for i in range(200):
-            # params["red-wall.to_world"] @= mi.Transform4f.translate([0.00, 0.00, 0.01])
+            params["red-wall.to_world"] @= mi.Transform4f.translate([0.00, 0.00, 0.01])
             # params["PerspectiveCamera.to_world"] @= mi.ScalarTransform4f.translate(
             #     [0.01, 0, 0]
             # )
-            # params.update()
+            params.update()
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
