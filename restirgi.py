@@ -140,6 +140,13 @@ class PathIntegrator(mi.SamplingIntegrator):
         assert self.film_size is not None
         return pos.y * self.film_size.x + pos.x
 
+    def similar(self, s1: RestirSample, s2: RestirSample) -> mi.Bool:
+        dist = dr.norm(s1.x_v - s2.x_v)
+        similar = dist < self.dist_threshold
+        similar &= dr.dot(s1.n_v, s2.n_v) > dr.cos(self.angle_threshold)
+
+        return similar
+
     def render(
         self,
         scene: mi.Scene,
@@ -188,6 +195,8 @@ class PathIntegrator(mi.SamplingIntegrator):
 
         self.sample_initial(scene, sampler, sensor, sample_pos)
         dr.eval(self.initial_sample)
+        if self.n == 0:
+            self.prev_sample = self.initial_sample
         self.temporal_resampling(sampler, mi.Vector2f(pos))
         dr.eval(self.temporal_reservoir)
         self.spatial_resampling(scene, sampler, pos)
@@ -215,9 +224,10 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             imgs.append(img)
 
-        # Update n and prev_sensor
+        # Update n, prev_sensor and prev_sample
         self.n += 1
         mi.traverse(self.prev_sensor).update(mi.traverse(sensor))
+        self.prev_sample = self.initial_sample
 
         return imgs
 
@@ -280,10 +290,7 @@ class PathIntegrator(mi.SamplingIntegrator):
                 RestirSample, self.initial_sample, self.to_idx(p)
             )
 
-            # Calculate similarity: Algorithm 4 l.7
-            dist = dr.norm(qn.x_v - q.x_v)
-            active &= dist < self.dist_threshold
-            active &= dr.dot(qn.n_v, q.n_v) > dr.cos(self.angle_threshold)
+            active &= self.similar(qn, q)
 
             Rn: RestirReservoir = dr.gather(
                 RestirReservoir, self.temporal_reservoir, self.to_idx(p), active
@@ -319,7 +326,6 @@ class PathIntegrator(mi.SamplingIntegrator):
             )  # l.11 - 13
 
             Rnew.merge(sampler, Rn, phat, active)
-            # Rs.merge(sampler, Rn, phat, active)
 
             Q.put(Rn.M, Rn.z.x_v, Rn.z.n_v, active)
 
@@ -332,7 +338,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         else:
             for i in range(len(Q)):
                 active = Q.active[i]
-                ray = ray_from_to(Rs.z.x_s, Q.p[i])
+                ray = ray_from_to(Rnew.z.x_s, Q.p[i])
                 active &= dr.dot(ray.d, Q.n[i]) < 0
                 active &= ~scene.ray_test(ray, active)
 
@@ -369,12 +375,10 @@ class PathIntegrator(mi.SamplingIntegrator):
         valid = ds.pdf > 0
 
         Sprev: RestirSample = dr.gather(
-            RestirSample, self.initial_sample, self.to_idx(mi.Point2u(ds.uv)), valid
+            RestirSample, self.prev_sample, self.to_idx(mi.Point2u(ds.uv)), valid
         )
 
-        dist = dr.norm(S.x_v - Sprev.x_v)
-        valid &= dist < self.dist_threshold
-        valid &= dr.dot(S.n_v, Sprev.n_v) > dr.cos(self.angle_threshold)
+        valid &= self.similar(S, Sprev)
 
         R = dr.select(valid, self.temporal_reservoir, dr.zeros(RestirReservoir))
 
@@ -621,11 +625,13 @@ if __name__ == "__main__":
         img_acc = None
 
         for i in range(200):
-            params["red-wall.to_world"] @= mi.Transform4f.translate([0.00, 0.00, 0.01])
-            # params["PerspectiveCamera.to_world"] @= mi.ScalarTransform4f.translate(
-            #     [0.01, 0, 0]
-            # )
-            params.update()
+            if i < 100:
+                params["sensor.to_world"] @= mi.Transform4f.translate([0.0, 0.0, 0.01])
+                # params["red-wall.to_world"] @= mi.Transform4f.translate([0.00, 0.00, 0.01])
+                # params["PerspectiveCamera.to_world"] @= mi.ScalarTransform4f.translate(
+                #     [0.01, 0, 0]
+                # )
+                params.update()
             imgs = integrator.render(scene, sensor, seed=i)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
