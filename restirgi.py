@@ -314,13 +314,13 @@ class PathIntegrator(mi.SamplingIntegrator):
                     div > 0, dr.abs(cos_psi_q) * dr.sqr(w_qr_len) / div, 0.0
                 )
 
-            active &= ~scene.ray_test(ray_from_to(Rn.z.x_s, q.x_v), active)
+            shadowed = scene.ray_test(ray_from_to(Rn.z.x_s, q.x_v), active)
 
             phat = dr.select(
-                active,
+                ~active | shadowed,
+                0,
                 p_hat(Rn.z.L_o)
                 * (dr.clamp(J_rcp(Rn.z, q), 0.0001, 10000.0) if self.jacobian else 1.0),
-                0,
             )  # l.11 - 13
 
             Rnew.merge(sampler, Rn, phat, active)
@@ -610,7 +610,7 @@ if __name__ == "__main__":
             {
                 "type": "path_test",
                 "jacobian": False,
-                "spatial_biased": True,
+                "spatial_biased": False,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,
@@ -624,7 +624,7 @@ if __name__ == "__main__":
 
         for i in range(200):
             if i < 100:
-                params["sensor.to_world"] @= mi.Transform4f.translate([0.0, 0.0, 0.01])
+                params["sensor.to_world"] @= mi.Transform4f.translate([0.0, 0.0, 0.00])
                 # params["red-wall.to_world"] @= mi.Transform4f.translate([0.00, 0.00, 0.01])
                 # params["PerspectiveCamera.to_world"] @= mi.ScalarTransform4f.translate(
                 #     [0.01, 0, 0]
