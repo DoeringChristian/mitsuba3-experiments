@@ -194,9 +194,9 @@ class PathIntegrator(mi.SamplingIntegrator):
             mi.traverse(self.prev_sensor).update(mi.traverse(sensor))
 
         self.sample_initial(scene, sampler, sensor, sample_pos)
-        dr.eval(self.initial_sample)
+        dr.eval(self.sample)
         if self.n == 0:
-            self.prev_sample = self.initial_sample
+            self.prev_sample = self.sample
         self.temporal_resampling(sampler, mi.Vector2f(pos))
         dr.eval(self.temporal_reservoir)
         self.spatial_resampling(scene, sampler, pos)
@@ -227,7 +227,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         # Update n, prev_sensor and prev_sample
         self.n += 1
         mi.traverse(self.prev_sensor).update(mi.traverse(sensor))
-        self.prev_sample = self.initial_sample
+        self.prev_sample = self.sample
 
         return imgs
 
@@ -241,7 +241,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         S = R.z
         temporal = S.f * S.L_o * R.W + self.emittance
 
-        S = self.initial_sample
+        S = self.sample
         initial = S.f / S.p_q * S.L_o + self.emittance
 
         return initial, temporal, spatial
@@ -271,7 +271,7 @@ class PathIntegrator(mi.SamplingIntegrator):
 
         max_iter = dr.select(Rs.M < self.M_MAX / 2, 9, 3)
 
-        q: RestirSample = self.initial_sample
+        q: RestirSample = self.sample
 
         Q = ReuseSet()
         Q.put(Rs.M, q.x_v, q.n_v, mi.Bool(True))
@@ -286,9 +286,7 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
             p = dr.clamp(pos + mi.Vector2i(offset), mi.Point2u(0), self.film_size)
 
-            qn: RestirSample = dr.gather(
-                RestirSample, self.initial_sample, self.to_idx(p)
-            )
+            qn: RestirSample = dr.gather(RestirSample, self.sample, self.to_idx(p))
 
             active &= self.similar(qn, q)
 
@@ -363,7 +361,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         sampler: mi.Sampler,
         pos: mi.Vector2f,
     ):
-        S = self.initial_sample
+        S = self.sample
 
         si: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
         si.p = S.x_v
@@ -456,7 +454,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         S.x_s = si.p
         S.n_s = si.n
 
-        self.initial_sample = S
+        self.sample = S
 
     def sample_ray(
         self,
