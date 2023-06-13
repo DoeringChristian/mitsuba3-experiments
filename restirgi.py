@@ -14,6 +14,26 @@ def J_rcp(q: "RestirSample", r: "RestirSample") -> mi.Float:
     Calculate the Reciprocal of the absolute of the Jacobian determinant.
     J_rcp = |J_{q\\rightarrow r}|^{-1} // Equation 11 from paper
     """
+    # offsetB = q.x_s - q.x_v
+    # offsetA = q.x_s - r.x_v
+    #
+    # RB2 = dr.dot(offsetB, offsetB)
+    # RA2 = dr.dot(offsetA, offsetA)
+    # offsetA = dr.normalize(offsetA)
+    # offsetB = dr.normalize(offsetB)
+    # cosPhiA = -dr.dot(offsetA, q.n_s)
+    # cosPhiB = -dr.dot(offsetB, q.n_s)
+    #
+    # jacobian = mi.Float(
+    #     dr.select((cosPhiA <= 0) | (RA2 <= 0) | (RB2 <= 0) | (cosPhiB <= 0), 0, 1)
+    # )
+    # jacobian = mi.Float(1.0)
+    #
+    # jacobian *= dr.select(
+    #     RA2 * cosPhiB > 0.0, dr.clamp(RB2 * cosPhiA / (RA2 * cosPhiB), 0.0, 1000.0), 0.0
+    # )
+    # return jacobian
+
     w_qq = q.x_v - q.x_s
     w_qq_len = dr.norm(w_qq)
     w_qq /= w_qq_len
@@ -24,8 +44,8 @@ def J_rcp(q: "RestirSample", r: "RestirSample") -> mi.Float:
     w_qr /= w_qr_len
     cos_psi_r = dr.dot(w_qr, q.n_s)
 
-    div = dr.abs(cos_psi_r) * dr.sqr(w_qq_len)
-    return dr.select(div > 0, dr.abs(cos_psi_q) * dr.sqr(w_qr_len) / div, 0.0)
+    div = dr.abs(cos_psi_q) * dr.sqr(w_qr_len)
+    return dr.select(div > 0, dr.abs(cos_psi_r) * dr.sqr(w_qq_len) / div, 0.0)
 
 
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
@@ -143,7 +163,7 @@ class PathIntegrator(mi.SamplingIntegrator):
     def to_idx(self, pos: mi.Vector2u) -> mi.UInt:
         pos = dr.clamp(mi.Point2u(pos), mi.Point2u(0), self.film_size)
         assert self.film_size is not None
-        return pos.y * self.film_size.x + pos.x
+        return (pos.y * self.film_size.x + pos.x) * self.spp + self.sample_offset
 
     def similar(self, s1: RestirSample, s2: RestirSample) -> mi.Bool:
         dist = dr.norm(s1.x_v - s2.x_v)
@@ -179,8 +199,10 @@ class PathIntegrator(mi.SamplingIntegrator):
         idx = dr.arange(mi.UInt, wavefront_size)
 
         pos = mi.Vector2u()
-        pos.y = idx // film_size.x
-        pos.x = dr.fma(-film_size.x, pos.y, idx)
+        pos.x = idx // spp % film_size.x
+        pos.y = idx // film_size.x // spp
+        self.sample_offset = idx % spp
+        self.spp = spp
 
         sample_pos = (mi.Point2f(pos) + sampler.next_2d()) / mi.Point2f(
             film.crop_size()
@@ -623,7 +645,7 @@ if __name__ == "__main__":
                 #     [0.01, 0, 0]
                 # )
                 params.update()
-            imgs = integrator.render(scene, sensor, seed=i)
+            imgs = integrator.render(scene, sensor, seed=i, spp=1)
             mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
             mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
             mi.util.write_bitmap(f"out/spatial{i}.jpg", imgs[2])
