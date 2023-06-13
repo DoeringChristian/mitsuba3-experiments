@@ -336,8 +336,12 @@ class PathIntegrator(mi.SamplingIntegrator):
         else:
             for i in range(len(Q)):
                 active = Q.active[i]
-                ray = ray_from_to(Rnew.z.x_v, Q.p[i])
-                # active &= dr.dot(ray.d, Q.n[i]) < 0
+
+                si: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
+                si.p = Rnew.z.x_v
+                si.n = Rnew.z.n_v
+                ray = si.spawn_ray_to(Q.p[i])
+
                 active &= ~scene.ray_test(ray, active)
 
                 Z += dr.select(active, Q.M[i], 0)
@@ -345,7 +349,6 @@ class PathIntegrator(mi.SamplingIntegrator):
             Rnew.W = dr.select(Z * phat > 0, Rnew.w / (Z * phat), 0.0)
 
         # Decrease search radius:
-        # dr.make_opaque(self.search_radius, any_reused)
         self.search_radius = dr.maximum(
             dr.select(any_reused, self.search_radius, self.search_radius / 2),
             3,
@@ -410,8 +413,6 @@ class PathIntegrator(mi.SamplingIntegrator):
         # pos: mi.Vector2u,
         sample_pos: mi.Point2f,
     ) -> RestirSample:
-        film = sensor.film()
-
         S = RestirSample()
         ray, ray_weight = sensor.sample_ray(0.0, 0.0, sample_pos, mi.Point2f(0.5))
 
