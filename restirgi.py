@@ -314,18 +314,18 @@ class PathIntegrator(mi.SamplingIntegrator):
                     div > 0, dr.abs(cos_psi_q) * dr.sqr(w_qr_len) / div, 0.0
                 )
 
-            shadowed = scene.ray_test(ray_from_to(Rn.z.x_s, q.x_v), active)
+            active &= ~scene.ray_test(ray_from_to(Rn.z.x_s, q.x_v), active)
 
             phat = dr.select(
-                ~active | shadowed,
-                0,
+                active,
                 p_hat(Rn.z.L_o)
                 * (dr.clamp(J_rcp(Rn.z, q), 0.0001, 10000.0) if self.jacobian else 1.0),
+                0,
             )  # l.11 - 13
 
             Rnew.merge(sampler, Rn, phat, active)
 
-            Q.put(Rn.M, Rn.z.x_v, Rn.z.n_v, active)
+            Q.put(Rn.M, qn.x_s, qn.n_s, active)
 
             any_reused |= active
 
@@ -336,8 +336,8 @@ class PathIntegrator(mi.SamplingIntegrator):
         else:
             for i in range(len(Q)):
                 active = Q.active[i]
-                ray = ray_from_to(Rnew.z.x_s, Q.p[i])
-                active &= dr.dot(ray.d, Q.n[i]) < 0
+                ray = ray_from_to(Rnew.z.x_v, Q.p[i])
+                # active &= dr.dot(ray.d, Q.n[i]) < 0
                 active &= ~scene.ray_test(ray, active)
 
                 Z += dr.select(active, Q.M[i], 0)
