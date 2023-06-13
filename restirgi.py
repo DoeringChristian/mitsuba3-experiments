@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 from dataclasses import dataclass
 import reproject
 
-mi.set_variant("cuda_ad_rgb")
-# dr.set_log_level(dr.LogLevel.Trace)
+if __name__ == "__main__":
+    mi.set_variant("cuda_ad_rgb")
 
 
 def J_rcp(q: "RestirSample", r: "RestirSample") -> mi.Float:
@@ -121,7 +121,7 @@ class RestirReservoir:
         self.M = dr.select(active, M0 + r.M, M0)
 
 
-class PathIntegrator(mi.SamplingIntegrator):
+class RestirIntegrator(mi.SamplingIntegrator):
     M_MAX = 1000000
     # M_MAX = 500
     # max_r = 3
@@ -169,7 +169,6 @@ class PathIntegrator(mi.SamplingIntegrator):
             self.film_size = film_size
 
         wavefront_size = film_size.x * film_size.y * spp
-        print(f"{wavefront_size=}")
 
         sampler = sensor.sampler()
         sampler.set_sample_count(spp)
@@ -209,34 +208,26 @@ class PathIntegrator(mi.SamplingIntegrator):
         self.spatial_resampling(scene, sampler, pos)
         dr.eval(self.spatial_reservoir, self.search_radius)
 
-        results = self.render_final()
-        dr.schedule(results)
-        dr.eval()
+        res = self.render_final()
 
-        imgs = []
-        for res in results:
-            film.prepare(self.aov_names())
+        film.prepare(self.aov_names())
+        block: mi.ImageBlock = film.create_block()
 
-            block: mi.ImageBlock = film.create_block()
+        aovs = [res.x, res.y, res.z, mi.Float(1)]
 
-            aovs = [res.x, res.y, res.z, mi.Float(1.0)]
+        block.put(pos, aovs)
 
-            block.put(pos, aovs)
+        film.put_block(block)
 
-            film.put_block(block)
-
-            img = film.develop()
-            dr.schedule(img)
-            dr.eval()
-
-            imgs.append(img)
+        img = film.develop()
+        dr.eval(img)
 
         # Update n, prev_sensor and prev_sample
         self.n += 1
         mi.traverse(self.prev_sensor).update(mi.traverse(sensor))
         self.prev_sample = self.sample
 
-        return imgs
+        return img
 
     def render_final(self) -> tuple[mi.Color3f, mi.Color3f, mi.Color3f]:
         assert self.film_size is not None
@@ -244,25 +235,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         S = R.z
         spatial = S.f * S.L_o * R.W + self.emittance
 
-        R = self.temporal_reservoir
-        S = R.z
-        temporal = S.f * S.L_o * R.W + self.emittance
-
-        S = self.sample
-        initial = S.f / S.p_q * S.L_o + self.emittance
-
-        return initial, temporal, spatial
-        return (
-            mi.TensorXf(
-                dr.ravel(initial), shape=[self.film_size.x, self.film_size.y, 3]
-            ),
-            mi.TensorXf(
-                dr.ravel(temporal), shape=[self.film_size.x, self.film_size.y, 3]
-            ),
-            mi.TensorXf(
-                dr.ravel(spatial), shape=[self.film_size.x, self.film_size.y, 3]
-            ),
-        )
+        return spatial
 
     def spatial_resampling(
         self, scene: mi.Scene, sampler: mi.Sampler, pos: mi.Vector2u
@@ -582,7 +555,7 @@ class PathIntegrator(mi.SamplingIntegrator):
         return dr.select(valid_ray, result, 0.0)
 
 
-mi.register_integrator("path_test", lambda props: PathIntegrator(props))
+mi.register_integrator("restirgi", lambda props: RestirIntegrator(props))
 
 if __name__ == "__main__":
     with dr.suspend_grad():
@@ -590,20 +563,17 @@ if __name__ == "__main__":
         scene["sensor"]["film"]["width"] = 1024
         scene["sensor"]["film"]["height"] = 1024
         scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
-        # scene["sensor"]["sampler"] = {"type": "multijitter"}
-        print(f"{scene=}")
         scene: mi.Scene = mi.load_dict(scene)
 
-        # scene = mi.load_file("./data/scenes/fence/scene.xml")
         params = mi.traverse(scene)
         print(f"{params=}")
 
         ref = mi.render(scene, spp=50 * 4)
         mi.util.write_bitmap("out/ref.jpg", ref)
 
-        integrator: PathIntegrator = mi.load_dict(
+        integrator: RestirIntegrator = mi.load_dict(
             {
-                "type": "path_test",
+                "type": "restirgi",
                 "jacobian": True,
                 "spatial_biased": False,
                 "bsdf_sampling": True,
@@ -612,29 +582,11 @@ if __name__ == "__main__":
             }
         )
 
-        sensor: mi.Sensor = scene.sensors()[0]
-        size = sensor.film().crop_size()
-
-        img_acc = None
-
         for i in range(200):
             if i < 100:
                 params["sensor.to_world"] @= mi.Transform4f.translate([0.0, 0.0, 0.00])
-                # params["red-wall.to_world"] @= mi.Transform4f.translate([0.00, 0.00, 0.01])
-                # params["PerspectiveCamera.to_world"] @= mi.ScalarTransform4f.translate(
-                #     [0.01, 0, 0]
-                # )
                 params.update()
-            imgs = integrator.render(scene, sensor, seed=i, spp=1)
-            mi.util.write_bitmap(f"out/initial{i}.jpg", imgs[0])
-            mi.util.write_bitmap(f"out/temporal{i}.jpg", imgs[1])
-            mi.util.write_bitmap(f"out/spatial{i}.jpg", imgs[2])
 
-            if img_acc is None:
-                img_acc = imgs[0]
-            else:
-                img_acc = img_acc * dr.opaque(mi.Float, float(i - 1) / float(i)) + imgs[
-                    0
-                ] / dr.opaque(mi.Float, i)
+            img = mi.render(scene, params, integrator=integrator, seed=i, spp=1)
 
-            mi.util.write_bitmap(f"out/acc{i}.jpg", img_acc)
+            mi.util.write_bitmap(f"out/{i}.jpg", img)
