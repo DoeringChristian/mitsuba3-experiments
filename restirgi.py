@@ -9,6 +9,25 @@ mi.set_variant("cuda_ad_rgb")
 # dr.set_log_level(dr.LogLevel.Trace)
 
 
+def J_rcp(q: "RestirSample", r: "RestirSample") -> mi.Float:
+    """
+    Calculate the Reciprocal of the absolute of the Jacobian determinant.
+    J_rcp = |J_{q\\rightarrow r}|^{-1} // Equation 11 from paper
+    """
+    w_qq = q.x_v - q.x_s
+    w_qq_len = dr.norm(w_qq)
+    w_qq /= w_qq_len
+    cos_psi_q = dr.dot(w_qq, q.n_s)
+
+    w_qr = r.x_v - q.x_s
+    w_qr_len = dr.norm(w_qr)
+    w_qr /= w_qr_len
+    cos_psi_r = dr.dot(w_qr, q.n_s)
+
+    div = dr.abs(cos_psi_r) * dr.sqr(w_qq_len)
+    return dr.select(div > 0, dr.abs(cos_psi_q) * dr.sqr(w_qr_len) / div, 0.0)
+
+
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
     """
     Compute the Multiple Importance Sampling (MIS) weight given the densities
@@ -280,26 +299,6 @@ class PathIntegrator(mi.SamplingIntegrator):
                 RestirReservoir, self.temporal_reservoir, self.to_idx(p), active
             )  # l.9
 
-            def J_rcp(q: RestirSample, r: RestirSample) -> mi.Float:
-                """
-                Calculate the Reciprocal of the absolute of the Jacobian determinant.
-                J_rcp = |J_{q\\rightarrow r}|^{-1} // Equation 11 from paper
-                """
-                w_qq = q.x_v - q.x_s
-                w_qq_len = dr.norm(w_qq)
-                w_qq /= w_qq_len
-                cos_psi_q = dr.dot(w_qq, q.n_s)
-
-                w_qr = r.x_v - q.x_s
-                w_qr_len = dr.norm(w_qr)
-                w_qr /= w_qr_len
-                cos_psi_r = dr.dot(w_qr, q.n_s)
-
-                div = dr.abs(cos_psi_r) * dr.sqr(w_qq_len)
-                return dr.select(
-                    div > 0, dr.abs(cos_psi_q) * dr.sqr(w_qr_len) / div, 0.0
-                )
-
             si: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
             si.p = q.x_v
             si.n = q.n_v
@@ -309,7 +308,11 @@ class PathIntegrator(mi.SamplingIntegrator):
                 ~active | shadowed,
                 0,
                 p_hat(Rn.z.L_o)
-                * (dr.clamp(J_rcp(Rn.z, q), 0.0001, 10000.0) if self.jacobian else 1.0),
+                * (
+                    dr.clamp(J_rcp(Rn.z, q), 1.0 / 1000.0, 1000.0)
+                    if self.jacobian
+                    else 1.0
+                ),
             )  # l.11 - 13
 
             Rnew.merge(sampler, Rn, phat, active)
@@ -599,7 +602,7 @@ if __name__ == "__main__":
         integrator: PathIntegrator = mi.load_dict(
             {
                 "type": "path_test",
-                "jacobian": False,
+                "jacobian": True,
                 "spatial_biased": False,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
