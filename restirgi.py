@@ -14,26 +14,6 @@ def J_rcp(q: "RestirSample", r: "RestirSample") -> mi.Float:
     Calculate the Reciprocal of the absolute of the Jacobian determinant.
     J_rcp = |J_{q\\rightarrow r}|^{-1} // Equation 11 from paper
     """
-    # offsetB = q.x_s - q.x_v
-    # offsetA = q.x_s - r.x_v
-    #
-    # RB2 = dr.dot(offsetB, offsetB)
-    # RA2 = dr.dot(offsetA, offsetA)
-    # offsetA = dr.normalize(offsetA)
-    # offsetB = dr.normalize(offsetB)
-    # cosPhiA = -dr.dot(offsetA, q.n_s)
-    # cosPhiB = -dr.dot(offsetB, q.n_s)
-    #
-    # jacobian = mi.Float(
-    #     dr.select((cosPhiA <= 0) | (RA2 <= 0) | (RB2 <= 0) | (cosPhiB <= 0), 0, 1)
-    # )
-    # jacobian = mi.Float(1.0)
-    #
-    # jacobian *= dr.select(
-    #     RA2 * cosPhiB > 0.0, dr.clamp(RB2 * cosPhiA / (RA2 * cosPhiB), 0.0, 1000.0), 0.0
-    # )
-    # return jacobian
-
     w_qq = q.x_v - q.x_s
     w_qq_len = dr.norm(w_qq)
     w_qq /= w_qq_len
