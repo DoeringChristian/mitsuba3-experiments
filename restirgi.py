@@ -183,11 +183,12 @@ class PathIntegrator(mi.SamplingIntegrator):
             )
             self.search_radius = dr.full(mi.Float, 10.0, wavefront_size)
 
-            self.prev_sensor_mat = reproject.w2c(sensor)
+            self.prev_sensor: mi.Sensor = mi.load_dict({"type": "perspective"})
+            mi.traverse(self.prev_sensor).update(mi.traverse(sensor))
 
         self.sample_initial(scene, sampler, sensor, sample_pos)
         dr.eval(self.initial_sample)
-        self.temporal_resampling(sampler, idx)
+        self.temporal_resampling(sampler, mi.Vector2f(pos))
         dr.eval(self.temporal_reservoir)
         self.spatial_resampling(scene, sampler, pos)
         dr.eval(self.spatial_reservoir, self.search_radius)
@@ -214,9 +215,9 @@ class PathIntegrator(mi.SamplingIntegrator):
 
             imgs.append(img)
 
-        # Update n and prev_sensor_params
+        # Update n and prev_sensor
         self.n += 1
-        self.prev_sensor_mat = reproject.w2c(sensor)
+        mi.traverse(self.prev_sensor).update(mi.traverse(sensor))
 
         return imgs
 
@@ -354,10 +355,28 @@ class PathIntegrator(mi.SamplingIntegrator):
     def temporal_resampling(
         self,
         sampler: mi.Sampler,
-        idx: mi.UInt,
+        pos: mi.Vector2f,
     ):
         S = self.initial_sample
-        R = self.temporal_reservoir
+
+        si: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
+        si.p = S.x_v
+        ds, _ = self.prev_sensor.sample_direction(
+            si, mi.Point2f(0.0)
+        )  # type: tuple[mi.DirectionSample3f, mi.Color3f]
+        ds: mi.DirectionSample3f = ds
+
+        valid = ds.pdf > 0
+
+        Sprev: RestirSample = dr.gather(
+            RestirSample, self.initial_sample, self.to_idx(mi.Point2u(ds.uv)), valid
+        )
+
+        dist = dr.norm(S.x_v - Sprev.x_v)
+        valid &= dist < self.dist_threshold
+        valid &= dr.dot(S.n_v, Sprev.n_v) > dr.cos(self.angle_threshold)
+
+        R = dr.select(valid, self.temporal_reservoir, dr.zeros(RestirReservoir))
 
         """
         Create a new reservoir to update with the new sample and merge the old temporal reservoir into.
