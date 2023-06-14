@@ -16,6 +16,7 @@ if __name__ == "__main__":
     scene["sensor"]["film"]["height"] = 1024
     scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
     scene: mi.Scene = mi.load_dict(scene)
+    scene = mi.load_file("./data/scenes/staircase/scene.xml")
 
     ref = mi.render(scene, spp=50 * 4)
 

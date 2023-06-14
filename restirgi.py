@@ -562,9 +562,7 @@ if __name__ == "__main__":
         scene["sensor"]["film"]["height"] = 1024
         scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
         scene: mi.Scene = mi.load_dict(scene)
-
-        params = mi.traverse(scene)
-        print(f"{params=}")
+        scene: mi.Scene = mi.load_file("./data/scenes/staircase/scene.xml")
 
         ref = mi.render(scene, spp=50 * 4)
         mi.util.write_bitmap("out/ref.jpg", ref)
@@ -572,7 +570,7 @@ if __name__ == "__main__":
         integrator: RestirIntegrator = mi.load_dict(
             {
                 "type": "restirgi",
-                "jacobian": False,
+                "jacobian": True,
                 "spatial_biased": False,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
@@ -581,10 +579,6 @@ if __name__ == "__main__":
         )
 
         for i in range(200):
-            if i < 100:
-                params["sensor.to_world"] @= mi.Transform4f.translate([0.0, 0.0, 0.00])
-                params.update()
-
-            img = mi.render(scene, params, integrator=integrator, seed=i, spp=1)
+            img = mi.render(scene, integrator=integrator, seed=i, spp=1)
 
             mi.util.write_bitmap(f"out/{i}.jpg", img)
