@@ -48,11 +48,11 @@ class ReuseSet:
         self.p = []
         self.n = []
 
-    def put(self, M: mi.UInt, pos: mi.Vector3f, n: mi.Vector3f, active: mi.Bool):
+    def put(self, M: mi.UInt, pos: mi.Vector3f, n: mi.Vector3f, active: mi.Bool = True):
         self.M.append(M)
         self.p.append(pos)
         self.n.append(n)
-        self.active.append(active)
+        self.active.append(mi.Bool(active))
 
     def __len__(self) -> int:
         assert len(self.M) == len(self.p) == len(self.active) == len(self.n)
@@ -248,8 +248,8 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
         q: RestirSample = self.sample
 
-        # Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o))
-        # Q.put(Rnew.M, Rnew.z.x_v, Rnew.z.n_v, mi.Bool(True))
+        Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o), self.similar(q, Rs.z))
+        # Q.put(Rs.M, Rs.z.x_v, Rs.z.n_v, self.similar(q, Rs.z))
 
         max_iter = dr.select(Rs.M < self.max_M_spatial / 2, 9, 3)
 
@@ -293,11 +293,11 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
             any_reused |= active
 
-        Z = mi.Float(0)
         phat = p_hat(Rnew.z.L_o)
         if self.spatial_biased:
             Rnew.W = dr.select(phat * Rnew.M > 0, Rnew.w / (Rnew.M * phat), 0)
         else:
+            Z = mi.UInt(Rs.M)
             for i in range(len(Q)):
                 active = Q.active[i]
 
