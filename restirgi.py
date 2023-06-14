@@ -122,9 +122,6 @@ class RestirReservoir:
 
 
 class RestirIntegrator(mi.SamplingIntegrator):
-    M_MAX = 1000000
-    # M_MAX = 500
-    # max_r = 3
     dist_threshold = 0.1
     angle_threshold = 25 * dr.pi / 180
 
@@ -247,14 +244,14 @@ class RestirIntegrator(mi.SamplingIntegrator):
         This is neccesary so we can clamp M.
         """
         Rnew: RestirReservoir = dr.zeros(RestirReservoir)
-        Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o))
-
-        max_iter = dr.select(Rs.M < self.M_MAX / 2, 9, 3)
+        Q = ReuseSet()
 
         q: RestirSample = self.sample
 
-        Q = ReuseSet()
-        Q.put(Rnew.M, Rnew.z.x_s, Rnew.z.n_s, mi.Bool(True))
+        # Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o))
+        # Q.put(Rnew.M, Rnew.z.x_v, Rnew.z.n_v, mi.Bool(True))
+
+        max_iter = dr.select(Rs.M < self.max_M_spatial / 2, 9, 3)
 
         any_reused = dr.full(mi.Bool, False, len(pos.x))
 
@@ -292,7 +289,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
             Rnew.merge(sampler, Rn, phat, active)
 
-            Q.put(Rn.M, Rn.z.x_s, Rn.z.n_s, active)
+            Q.put(Rn.M, Rn.z.x_v, Rn.z.n_v, active)
 
             any_reused |= active
 
@@ -305,10 +302,11 @@ class RestirIntegrator(mi.SamplingIntegrator):
                 active = Q.active[i]
 
                 si: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
-                si.p = Rnew.z.x_v
-                si.n = Rnew.z.n_v
+                si.p = Rnew.z.x_s
+                si.n = Rnew.z.n_s
                 ray = si.spawn_ray_to(Q.p[i])
 
+                # active &= dr.dot(ray.d, Q.n[i]) < 0
                 active &= ~scene.ray_test(ray, active)
 
                 Z += dr.select(active, Q.M[i], 0)
@@ -574,7 +572,7 @@ if __name__ == "__main__":
         integrator: RestirIntegrator = mi.load_dict(
             {
                 "type": "restirgi",
-                "jacobian": True,
+                "jacobian": False,
                 "spatial_biased": False,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
