@@ -1,9 +1,5 @@
 import mitsuba as mi
 import drjit as dr
-import matplotlib.pyplot as plt
-import matplotlib.pyplot as plt
-from dataclasses import dataclass
-import reproject
 from tqdm import tqdm
 
 if __name__ == "__main__":
@@ -580,7 +576,7 @@ if __name__ == "__main__":
             {
                 "type": "restirgi",
                 "jacobian": True,
-                "spatial_biased": True,
+                "spatial_biased": False,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,
@@ -590,6 +586,6 @@ if __name__ == "__main__":
         )
 
         for i in tqdm(range(200)):
-            img = mi.render(scene, integrator=integrator, seed=i, spp=4)
+            img = mi.render(scene, integrator=integrator, seed=i, spp=1)
 
             mi.util.write_bitmap(f"out/{i}.jpg", img)
