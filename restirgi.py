@@ -218,7 +218,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
         si = self.si_v
         bsdf: mi.BSDF = self.si_v.bsdf()
-        β = bsdf.eval(mi.BSDFContext(), si, si.to_local(dr.normalize(S.x_s - S.x_v)))
+        β = bsdf.eval(mi.BSDFContext(), si, si.to_local(dr.normalize(S.x_s - si.p)))
 
         result = β * S.L_o * R.W + self.emittance
 
