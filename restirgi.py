@@ -1,6 +1,7 @@
 import mitsuba as mi
 import drjit as dr
 from tqdm import tqdm
+from drjitstruct import drjitstruct
 
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
@@ -56,6 +57,7 @@ class ReuseSet:
         return len(self.M)
 
 
+@drjitstruct
 class RestirSample:
     x_v: mi.Vector3f
     n_v: mi.Vector3f
@@ -67,30 +69,13 @@ class RestirSample:
     f: mi.Color3f
     valid: mi.Bool
 
-    DRJIT_STRUCT = {
-        "x_v": mi.Vector3f,
-        "n_v": mi.Vector3f,
-        "x_s": mi.Vector3f,
-        "n_s": mi.Vector3f,
-        "L_o": mi.Color3f,
-        "p_q": mi.Float,
-        "f": mi.Color3f,
-        "valid": mi.Bool,
-    }
 
-
+@drjitstruct
 class RestirReservoir:
     z: RestirSample
     w: mi.Float
     W: mi.Float
     M: mi.UInt
-
-    DRJIT_STRUCT = {
-        "z": RestirSample,
-        "w": mi.Float,
-        "W": mi.Float,
-        "M": mi.UInt,
-    }
 
     def update(
         self,
