@@ -136,6 +136,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         self.max_M_temporal = props.get("max_M_temporal", None)
         self.max_M_spatial = props.get("max_M_spatial", None)
         self.initial_search_radius = props.get("initial_search_radius", 10.0)
+        self.minimal_search_radius = props.get("minimal_search_radius", 3.00)
         self.n = 0
         self.film_size: None | mi.Vector2u = None
 
@@ -234,9 +235,9 @@ class RestirIntegrator(mi.SamplingIntegrator):
         assert self.film_size is not None
         R = self.spatial_reservoir
         S = R.z
-        spatial = S.f * S.L_o * R.W + self.emittance
+        result = S.f * S.L_o * R.W + self.emittance
 
-        return spatial
+        return result
 
     def spatial_resampling(
         self,
@@ -256,7 +257,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         q: RestirSample = self.sample
 
         Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o), self.similar(q, Rs.z))
-        # Q.put(Rs.M, Rs.z.x_v, Rs.z.n_v, self.similar(q, Rs.z))
+        Q.put(Rs.M, Rs.z.x_v, Rs.z.n_v, self.similar(q, Rs.z))
 
         max_iter = dr.select(Rs.M < self.max_M_spatial / 2, 9, 3)
 
@@ -304,7 +305,8 @@ class RestirIntegrator(mi.SamplingIntegrator):
         if self.spatial_biased:
             Rnew.W = dr.select(phat * Rnew.M > 0, Rnew.w / (Rnew.M * phat), 0)
         else:
-            Z = mi.UInt(Rs.M)
+            # Z = mi.UInt(Rs.M)
+            Z = mi.UInt(0)
             for i in range(len(Q)):
                 active = Q.active[i]
 
@@ -323,7 +325,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         # Decrease search radius:
         self.search_radius = dr.maximum(
             dr.select(any_reused, self.search_radius, self.search_radius / 2),
-            3,
+            self.minimal_search_radius,
         )
 
         if self.max_M_spatial is not None:
@@ -569,7 +571,7 @@ if __name__ == "__main__":
         scene["sensor"]["film"]["height"] = 1024
         scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
         scene: mi.Scene = mi.load_dict(scene)
-        scene: mi.Scene = mi.load_file("./data/scenes/staircase/scene.xml")
+        scene: mi.Scene = mi.load_file("./data/scenes/dining-room/scene.xml")
 
         ref = mi.render(scene, spp=50 * 4)
         mi.util.write_bitmap("out/ref.jpg", ref)
@@ -578,11 +580,12 @@ if __name__ == "__main__":
             {
                 "type": "restirgi",
                 "jacobian": True,
-                "spatial_biased": False,
+                "spatial_biased": True,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,
                 "initial_search_radius": 10,
+                "minimal_search_radius": 10,
             }
         )
 
