@@ -66,7 +66,6 @@ class RestirSample:
 
     L_o: mi.Color3f
     p_q: mi.Float
-    f: mi.Color3f
     valid: mi.Bool
 
 
@@ -216,7 +215,12 @@ class RestirIntegrator(mi.SamplingIntegrator):
         assert self.film_size is not None
         R = self.spatial_reservoir
         S = R.z
-        result = S.f * S.L_o * R.W + self.emittance
+
+        si = self.si_v
+        bsdf: mi.BSDF = self.si_v.bsdf()
+        β = bsdf.eval(mi.BSDFContext(), si, si.to_local(dr.normalize(S.x_s - S.x_v)))
+
+        result = β * S.L_o * R.W + self.emittance
 
         return result
 
@@ -381,6 +385,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         S.x_v = si.p
         S.n_v = si.n
         S.valid = si.is_valid()
+        self.si_v = si
 
         if self.bsdf_sampling:
             bsdf_sample, bsdf_weight = bsdf.sample(
@@ -389,17 +394,11 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
             wo = bsdf_sample.wo
             pdf = bsdf_sample.pdf
-            bsdf_value = (
-                bsdf_weight * pdf
-            )  # have to retreive the bsdf_value from the bsdf_weight
         else:
             wo = mi.warp.square_to_uniform_hemisphere(sampler.next_2d())
             pdf = mi.warp.square_to_uniform_hemisphere_pdf(wo)
-            bsdf_value = bsdf.eval(mi.BSDFContext(), si, wo)
 
         S.p_q = pdf
-
-        S.f = bsdf_value
 
         ray = si.spawn_ray(si.to_world(wo))
 
@@ -552,8 +551,10 @@ if __name__ == "__main__":
         scene["sensor"]["film"]["height"] = 1024
         scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
         scene: mi.Scene = mi.load_dict(scene)
-        scene: mi.Scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
+        # scene: mi.Scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
+        scene: mi.Scene = mi.load_file("data/scenes/staircase/scene.xml")
 
+        print("Rendering Reference Image:")
         ref = mi.render(scene, spp=50 * 4)
         mi.util.write_bitmap("out/ref.jpg", ref)
 
@@ -561,7 +562,7 @@ if __name__ == "__main__":
             {
                 "type": "restirgi",
                 "jacobian": True,
-                "spatial_biased": False,
+                "spatial_biased": True,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,
@@ -570,6 +571,7 @@ if __name__ == "__main__":
             }
         )
 
+        print("ReSTIRGI:")
         for i in tqdm(range(200)):
             img = mi.render(scene, integrator=integrator, seed=i, spp=1)
 
