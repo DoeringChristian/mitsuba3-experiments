@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 import reproject
+from tqdm import tqdm
 
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
@@ -134,6 +135,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         self.bsdf_sampling = props.get("bsdf_sampling", True)
         self.max_M_temporal = props.get("max_M_temporal", None)
         self.max_M_spatial = props.get("max_M_spatial", None)
+        self.initial_search_radius = props.get("initial_search_radius", 10.0)
         self.n = 0
         self.film_size: None | mi.Vector2u = None
 
@@ -191,7 +193,9 @@ class RestirIntegrator(mi.SamplingIntegrator):
             self.spatial_reservoir: RestirReservoir = dr.zeros(
                 RestirReservoir, wavefront_size
             )
-            self.search_radius = dr.full(mi.Float, 10.0, wavefront_size)
+            self.search_radius = dr.full(
+                mi.Float, self.initial_search_radius, wavefront_size
+            )
 
             self.prev_sensor: mi.Sensor = mi.load_dict({"type": "perspective"})
             mi.traverse(self.prev_sensor).update(mi.traverse(sensor))
@@ -235,7 +239,10 @@ class RestirIntegrator(mi.SamplingIntegrator):
         return spatial
 
     def spatial_resampling(
-        self, scene: mi.Scene, sampler: mi.Sampler, pos: mi.Vector2u
+        self,
+        scene: mi.Scene,
+        sampler: mi.Sampler,
+        pos: mi.Vector2u,
     ):
         Rs = self.spatial_reservoir
 
@@ -575,10 +582,11 @@ if __name__ == "__main__":
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,
+                "initial_search_radius": 3,
             }
         )
 
-        for i in range(200):
+        for i in tqdm(range(200)):
             img = mi.render(scene, integrator=integrator, seed=i, spp=1)
 
             mi.util.write_bitmap(f"out/{i}.jpg", img)
