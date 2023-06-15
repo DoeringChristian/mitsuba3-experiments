@@ -571,7 +571,7 @@ if __name__ == "__main__":
         scene["sensor"]["film"]["height"] = 1024
         scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
         scene: mi.Scene = mi.load_dict(scene)
-        scene: mi.Scene = mi.load_file("./data/scenes/dining-room/scene.xml")
+        scene: mi.Scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
 
         ref = mi.render(scene, spp=50 * 4)
         mi.util.write_bitmap("out/ref.jpg", ref)
@@ -590,6 +590,6 @@ if __name__ == "__main__":
         )
 
         for i in tqdm(range(200)):
-            img = mi.render(scene, integrator=integrator, seed=i, spp=1)
+            img = mi.render(scene, integrator=integrator, seed=i, spp=4)
 
             mi.util.write_bitmap(f"out/{i}.jpg", img)
