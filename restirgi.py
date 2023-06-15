@@ -582,7 +582,7 @@ if __name__ == "__main__":
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,
-                "initial_search_radius": 3,
+                "initial_search_radius": 10,
             }
         )
 
