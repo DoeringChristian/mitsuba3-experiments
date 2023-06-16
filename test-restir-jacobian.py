@@ -16,7 +16,7 @@ if __name__ == "__main__":
     scene["sensor"]["film"]["height"] = 1024
     scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
     scene: mi.Scene = mi.load_dict(scene)
-    # scene = mi.load_file("./data/scenes/staircase/scene.xml")
+    scene = mi.load_file("./data/scenes/staircase/scene.xml")
     # scene: mi.Scene = mi.load_file("data/scenes/shadow-mask/scene.xml")
 
     ref = mi.render(scene, spp=256)
@@ -36,8 +36,8 @@ if __name__ == "__main__":
     unbiased: restirgi.RestirIntegrator = mi.load_dict(
         {
             "type": "restirgi",
-            "jacobian": False,
-            "bias_correction": True,
+            "jacobian": True,
+            "bias_correction": False,
             "bsdf_sampling": True,
             "max_M_spatial": 500,
             "max_M_temporal": 30,
