@@ -16,7 +16,7 @@ if __name__ == "__main__":
     scene["sensor"]["film"]["height"] = 1024
     scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
     scene: mi.Scene = mi.load_dict(scene)
-    scene = mi.load_file("./data/scenes/staircase/scene.xml")
+    # scene = mi.load_file("./data/scenes/staircase/scene.xml")
     # scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
     # scene: mi.Scene = mi.load_file("data/scenes/shadow-mask/scene.xml")
 
@@ -75,7 +75,7 @@ if __name__ == "__main__":
 
     mi.util.write_bitmap("out/unbiased.exr", img_unbiased)
 
-    fig, ax = plt.subplots(2, 3, figsize=(10, 20))
+    fig, ax = plt.subplots(2, 3, figsize=(20, 10))
     fig.patch.set_visible(False)
 
     ax[0][0].axis("off")

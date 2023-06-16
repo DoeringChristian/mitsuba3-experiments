@@ -7,6 +7,38 @@ if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
 
 
+def RTXDI_Partial(
+    receiver_pos: mi.Vector3f, sample_pos: mi.Vector3f, sample_normal: mi.Vector3f
+) -> tuple[mi.Float, mi.Float]:
+    vec = receiver_pos - sample_pos
+
+    distance_to_surface = dr.norm(vec)
+    cosine_emission_angle = dr.clamp(
+        dr.dot(sample_normal, vec / distance_to_surface), 0, 1
+    )
+
+    return distance_to_surface, cosine_emission_angle
+
+
+def RTXDI_J(
+    receiver_pos: mi.Vector3f,
+    neighbor_pos: mi.Vector3f,
+    neighbor_res: "RestirReservoir",
+) -> mi.Float:
+    new_distance, new_cosine = RTXDI_Partial(
+        receiver_pos, neighbor_res.z.x_s, neighbor_res.z.n_s
+    )
+    original_distance, original_cosine = RTXDI_Partial(
+        neighbor_pos, neighbor_res.z.x_s, neighbor_res.z.n_s
+    )
+
+    jacobian = (new_cosine * original_distance * original_distance) / (
+        original_cosine * new_distance * new_distance
+    )
+    jacobian = dr.select(dr.isinf(jacobian) | dr.isnan(jacobian), 0, jacobian)
+    return jacobian
+
+
 def J_rcp(q: "RestirSample", r: "RestirSample") -> mi.Float:
     """
     Calculate the Reciprocal of the absolute of the Jacobian determinant.
@@ -272,7 +304,8 @@ class RestirIntegrator(mi.SamplingIntegrator):
             phat = dr.select(
                 ~active | shadowed,
                 0,
-                p_hat(Rn.z.L_o) * (J_rcp(Rn.z, q) if self.jacobian else 1.0),
+                p_hat(Rn.z.L_o)
+                * (RTXDI_J(q.x_v, qn.x_v, Rn) if self.jacobian else 1.0),
             )  # l.11 - 13
 
             Rnew.merge(sampler, Rn, phat, active)
