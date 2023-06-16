@@ -110,7 +110,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         super().__init__(props)
         self.max_depth: int = props.get("max_depth", 8)
         self.rr_depth: int = props.get("rr_depth", 2)
-        self.spatial_biased = props.get("spatial_biased", True)
+        self.bias_correction = props.get("bias_correction", True)
         self.jacobian = props.get("jacobian", True)
         self.bsdf_sampling = props.get("bsdf_sampling", True)
         self.max_M_temporal = props.get("max_M_temporal", None)
@@ -287,10 +287,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
             any_reused |= active
 
         phat = p_hat(Rnew.z.L_o)
-        if self.spatial_biased:
-            Rnew.W = dr.select(phat * Rnew.M > 0, Rnew.w / (Rnew.M * phat), 0)
-        else:
-            # Z = mi.UInt(Rs.M)
+        if self.bias_correction:
             Z = mi.UInt(0)
             for i in range(len(Q)):
                 active = Q.active[i]
@@ -306,6 +303,8 @@ class RestirIntegrator(mi.SamplingIntegrator):
                 Z += dr.select(active, Q.M[i], 0)
 
             Rnew.W = dr.select(Z * phat > 0, Rnew.w / (Z * phat), 0.0)
+        else:
+            Rnew.W = dr.select(phat * Rnew.M > 0, Rnew.w / (Rnew.M * phat), 0)
 
         # Decrease search radius:
         self.search_radius = dr.maximum(
@@ -552,7 +551,8 @@ if __name__ == "__main__":
         scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
         scene: mi.Scene = mi.load_dict(scene)
         # scene: mi.Scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
-        scene: mi.Scene = mi.load_file("data/scenes/staircase/scene.xml")
+        # scene: mi.Scene = mi.load_file("data/scenes/staircase/scene.xml")
+        # scene: mi.Scene = mi.load_file("data/scenes/shadow-mask/scene.xml")
 
         print("Rendering Reference Image:")
         ref = mi.render(scene, spp=50 * 4)
@@ -561,8 +561,8 @@ if __name__ == "__main__":
         integrator: RestirIntegrator = mi.load_dict(
             {
                 "type": "restirgi",
-                "jacobian": True,
-                "spatial_biased": True,
+                "jacobian": False,
+                "bias_correction": False,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,
