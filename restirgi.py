@@ -15,15 +15,15 @@ def J_rcp(q: "RestirSample", r: "RestirSample") -> mi.Float:
     w_qq = q.x_v - q.x_s
     w_qq_len = dr.norm(w_qq)
     w_qq /= w_qq_len
-    cos_psi_q = dr.dot(w_qq, q.n_s)
+    cos_psi_q = dr.clamp(dr.dot(w_qq, q.n_s), 0, 1)
 
     w_qr = r.x_v - q.x_s
     w_qr_len = dr.norm(w_qr)
     w_qr /= w_qr_len
-    cos_psi_r = dr.dot(w_qr, q.n_s)
+    cos_psi_r = dr.clamp(dr.dot(w_qr, q.n_s), 0, 1)
 
-    div = dr.abs(cos_psi_q) * dr.sqr(w_qr_len)
-    return dr.select(div > 0, dr.abs(cos_psi_r) * dr.sqr(w_qq_len) / div, 0.0)
+    div = dr.abs(cos_psi_r) * dr.sqr(w_qq_len)
+    return dr.select(div > 0, dr.abs(cos_psi_q) * dr.sqr(w_qr_len) / div, 0.0)
 
 
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
@@ -272,12 +272,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
             phat = dr.select(
                 ~active | shadowed,
                 0,
-                p_hat(Rn.z.L_o)
-                * (
-                    dr.clamp(J_rcp(Rn.z, q), 1.0 / 1000.0, 1000.0)
-                    if self.jacobian
-                    else 1.0
-                ),
+                p_hat(Rn.z.L_o) * (J_rcp(Rn.z, q) if self.jacobian else 1.0),
             )  # l.11 - 13
 
             Rnew.merge(sampler, Rn, phat, active)

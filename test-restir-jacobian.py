@@ -17,6 +17,7 @@ if __name__ == "__main__":
     scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
     scene: mi.Scene = mi.load_dict(scene)
     scene = mi.load_file("./data/scenes/staircase/scene.xml")
+    # scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
     # scene: mi.Scene = mi.load_file("data/scenes/shadow-mask/scene.xml")
 
     ref = mi.render(scene, spp=256)
