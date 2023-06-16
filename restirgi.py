@@ -553,9 +553,10 @@ if __name__ == "__main__":
         # scene: mi.Scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
         # scene: mi.Scene = mi.load_file("data/scenes/staircase/scene.xml")
         # scene: mi.Scene = mi.load_file("data/scenes/shadow-mask/scene.xml")
+        # scene: mi.Scene = mi.load_file("data/scenes/dining-room/scene.xml")
 
         print("Rendering Reference Image:")
-        ref = mi.render(scene, spp=50 * 4)
+        ref = mi.render(scene, spp=256)
         mi.util.write_bitmap("out/ref.jpg", ref)
 
         integrator: RestirIntegrator = mi.load_dict(
@@ -567,7 +568,6 @@ if __name__ == "__main__":
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,
                 "initial_search_radius": 10,
-                "minimal_search_radius": 10,
             }
         )
 
