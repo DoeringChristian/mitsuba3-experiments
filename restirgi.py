@@ -241,8 +241,8 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
         q: RestirSample = self.sample
 
-        Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o), self.similar(q, Rs.z))
-        Q.put(Rs.M, Rs.z.x_v, Rs.z.n_v, self.similar(q, Rs.z))
+        Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o))
+        # Q.put(Rs.M, Rs.z.x_v, Rs.z.n_v, self.similar(q, Rs.z))
 
         max_iter = dr.select(Rs.M < self.max_M_spatial / 2, 9, 3)
 
@@ -288,7 +288,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
         phat = p_hat(Rnew.z.L_o)
         if self.bias_correction:
-            Z = mi.UInt(0)
+            Z = mi.UInt(Rs.M)
             for i in range(len(Q)):
                 active = Q.active[i]
 
