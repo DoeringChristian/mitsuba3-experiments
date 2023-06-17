@@ -16,7 +16,8 @@ if __name__ == "__main__":
     scene["sensor"]["film"]["height"] = 1024
     scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
     scene: mi.Scene = mi.load_dict(scene)
-    # scene = mi.load_file("./data/scenes/staircase/scene.xml")
+    scene = mi.load_file("./data/scenes/staircase/scene.xml")
+    # scene = mi.load_file("./data/scenes/wall/scene.xml")
     # scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
     # scene: mi.Scene = mi.load_file("data/scenes/shadow-mask/scene.xml")
 
@@ -53,7 +54,7 @@ if __name__ == "__main__":
     for i in tqdm(range(n_iterations)):
         img = mi.render(scene, integrator=biased, seed=i, spp=spp)
         var_biased.append(dr.mean_nested(dr.sqr(img - dr.mean_nested(img)))[0])
-        bias_biased.append(dr.abs(dr.mean_nested(ref - img))[0])
+        bias_biased.append(dr.mean_nested(img - ref)[0])
         mse_biased.append(dr.mean_nested(dr.sqr(img - ref)))
 
     img_biased = img
@@ -68,7 +69,7 @@ if __name__ == "__main__":
     for i in tqdm(range(n_iterations)):
         img = mi.render(scene, integrator=unbiased, seed=i, spp=spp)
         var_unbiased.append(dr.mean_nested(dr.sqr(img - dr.mean_nested(img)))[0])
-        bias_unbiased.append(dr.abs(dr.mean_nested(ref - img))[0])
+        bias_unbiased.append(dr.mean_nested(img - ref)[0])
         mse_unbiased.append(dr.mean_nested(dr.sqr(img - ref)))
 
     img_unbiased = img

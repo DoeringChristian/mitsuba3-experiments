@@ -305,7 +305,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
                 ~active | shadowed,
                 0,
                 p_hat(Rn.z.L_o)
-                * (RTXDI_J(q.x_v, qn.x_v, Rn) if self.jacobian else 1.0),
+                * (dr.clamp(J_rcp(Rn.z, q), 1, 1000) if self.jacobian else 1.0),
             )  # l.11 - 13
 
             Rnew.merge(sampler, Rn, phat, active)
@@ -379,7 +379,8 @@ class RestirIntegrator(mi.SamplingIntegrator):
         w = dr.select(S.p_q > 0, phat / S.p_q, 0.0)  # Weight for new sample
         Rnew.update(sampler, S, w)  # Add new sample to Rnew
 
-        Rnew.merge(sampler, R, p_hat(R.z.L_o))  # add min(R.M, CLAMP) samples from R
+        # add min(R.M, CLAMP) samples from R
+        Rnew.merge(sampler, R, p_hat(R.z.L_o))
 
         phat = p_hat(Rnew.z.L_o)
         Rnew.W = dr.select(
@@ -482,7 +483,8 @@ class RestirIntegrator(mi.SamplingIntegrator):
         loop.set_max_iterations(self.max_depth)
 
         while loop(active):
-            si = scene.ray_intersect(ray)  # TODO: not necesarry in first interaction
+            # TODO: not necesarry in first interaction
+            si = scene.ray_intersect(ray)
 
             # ---------------------- Direct emission ----------------------
 
@@ -578,6 +580,7 @@ if __name__ == "__main__":
         scene["sensor"]["film"]["height"] = 1024
         scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
         scene: mi.Scene = mi.load_dict(scene)
+        scene: mi.Scene = mi.load_file("./data/scenes/wall/scene.xml")
         # scene: mi.Scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
         # scene: mi.Scene = mi.load_file("data/scenes/staircase/scene.xml")
         # scene: mi.Scene = mi.load_file("data/scenes/shadow-mask/scene.xml")
@@ -591,7 +594,7 @@ if __name__ == "__main__":
             {
                 "type": "restirgi",
                 "jacobian": False,
-                "bias_correction": False,
+                "bias_correction": True,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,

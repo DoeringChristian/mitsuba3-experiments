@@ -12,23 +12,6 @@ def hash(p: mi.Point3u | mi.Point3f, hash_size: int):
     return ((p.x * 73856093) ^ (p.y * 19349663) ^ (p.z * 83492791)) % hash_size
 
 
-def cumsum(src: mi.UInt | mi.Float):
-    N = dr.shape(src)[-1]
-    # idx = dr.arange(mi.UInt, N)
-    dst = dr.zeros(type(src), N)
-    depth = mi.UInt(0)
-
-    loop = mi.Loop("cumsum", lambda: (dst, depth))
-
-    loop.set_max_iterations(N)
-
-    while loop(depth <= dr.arange(mi.UInt, N)):
-        dst += dr.gather(mi.UInt, src, depth, depth <= dr.arange(mi.UInt, N))
-        depth += 1
-
-    return dst
-
-
 class HashGrid:
     def __init__(
         self, sample: mi.Point3f, resolution: int, hash_size: None | int = None
@@ -50,6 +33,7 @@ class HashGrid:
         self.bbmax = (
             mi.Point3f(dr.max(sample.x), dr.max(sample.y), dr.max(sample.z)) + 0.0001
         )
+        from prefix_sum import prefix_sum
 
         h = self.bin_idx(sample)
 
@@ -65,7 +49,7 @@ class HashGrid:
         bin_size = dr.zeros(mi.UInt, self.hash_size)
         dr.scatter_reduce(dr.ReduceOp.Add, bin_size, 1, h)
         dr.eval(bin_size)
-        cs = cumsum(bin_size)
+        cs = prefix_sum(bin_size)
 
         """
         Somewhat convoluted way to reindex the prefix sum (cs)
@@ -194,8 +178,6 @@ class HashGrid:
 
 
 if __name__ == "__main__":
-    test = mi.UInt(1, 2, 3, 4, 5, 6)
-    print(f"{cumsum(test)=}")
     N = 1000
 
     sampler: mi.Sampler = mi.load_dict({"type": "independent"})
