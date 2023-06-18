@@ -12,6 +12,8 @@ def prefix_sum(x: mi.Float) -> mi.Float:
 
     W. Daniel Hillis and Guy L. Steele. 1986. Data parallel algorithms. Commun. ACM 29, 12 (Dec. 1986), 1170–1183. https://doi.org/10.1145/7902.7903
     """
+    x = type(x)(x)
+
     loop_record = dr.flag(dr.JitFlag.LoopRecord)
     dr.set_flag(dr.JitFlag.LoopRecord, False)
 
@@ -22,6 +24,8 @@ def prefix_sum(x: mi.Float) -> mi.Float:
 
     while loop(i <= math.floor(math.log2(n))):
         j = dr.arange(mi.UInt, 2**i, n)
+        if dr.shape(j)[-1] == 0:
+            break
         res = dr.gather(type(x), x, j) + dr.gather(type(x), x, j - 2**i)
         dr.scatter(x, res, j)
 
