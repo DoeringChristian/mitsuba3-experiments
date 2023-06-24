@@ -39,6 +39,20 @@ def RTXDI_J(
     return jacobian
 
 
+def J(receiver_pos: mi.Vector3f, neighbor_res: mi.Vector3f) -> mi.Float:
+    v_new = receiver_pos - neighbor_res.z.x_s
+    d_new = dr.norm(v_new)
+    cos_new = dr.clamp(dr.dot(v_new, neighbor_res.z.n_s) / d_new, 0, 1)
+
+    v_old = neighbor_res.z.x_v - neighbor_res.z.x_s
+    d_old = dr.norm(v_old)
+    cos_old = dr.clamp(dr.dot(v_old, neighbor_res.z.n_s) / d_old, 0, 1)
+
+    div = cos_old * dr.sqr(d_new)
+    jacobian = dr.select(div > 0, cos_new * dr.sqr(d_old) / div, 0)
+    return jacobian
+
+
 def J_rcp(q: "RestirSample", r: "RestirSample") -> mi.Float:
     """
     Calculate the Reciprocal of the absolute of the Jacobian determinant.
@@ -305,7 +319,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
                 ~active | shadowed,
                 0,
                 p_hat(Rn.z.L_o)
-                * (dr.clamp(J_rcp(Rn.z, q), 1, 1000) if self.jacobian else 1.0),
+                * (dr.clamp(J(q.x_v, Rn), 0, 1000) if self.jacobian else 1.0),
             )  # l.11 - 13
 
             Rnew.merge(sampler, Rn, phat, active)
@@ -580,7 +594,7 @@ if __name__ == "__main__":
         scene["sensor"]["film"]["height"] = 1024
         scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
         scene: mi.Scene = mi.load_dict(scene)
-        scene: mi.Scene = mi.load_file("./data/scenes/wall/scene.xml")
+        # scene: mi.Scene = mi.load_file("./data/scenes/wall/scene.xml")
         # scene: mi.Scene = mi.load_file("./data/scenes/living-room-3/scene.xml")
         # scene: mi.Scene = mi.load_file("data/scenes/staircase/scene.xml")
         # scene: mi.Scene = mi.load_file("data/scenes/shadow-mask/scene.xml")
@@ -593,8 +607,8 @@ if __name__ == "__main__":
         integrator: RestirIntegrator = mi.load_dict(
             {
                 "type": "restirgi",
-                "jacobian": False,
-                "bias_correction": True,
+                "jacobian": True,
+                "bias_correction": False,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
                 "max_M_temporal": 30,
