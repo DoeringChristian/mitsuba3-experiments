@@ -163,6 +163,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         self.max_M_spatial = props.get("max_M_spatial", None)
         self.initial_search_radius = props.get("initial_search_radius", 10.0)
         self.minimal_search_radius = props.get("minimal_search_radius", 3.00)
+        self.spatial_spatial_reuse = props.get("spatial_spatial_reuse", False)
         self.n = 0
         self.film_size: None | mi.Vector2u = None
 
@@ -287,8 +288,11 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
         q: RestirSample = self.sample
 
-        Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o))
-        # Q.put(Rs.M, Rs.z.x_v, Rs.z.n_v, self.similar(q, Rs.z))
+        Z = mi.UInt(0)
+
+        if self.spatial_spatial_reuse:
+            Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o))
+            Z += Rs.M
 
         max_iter = dr.select(Rs.M < self.max_M_spatial / 2, 9, 3)
 
@@ -330,7 +334,6 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
         phat = p_hat(Rnew.z.L_o)
         if self.bias_correction:
-            Z = mi.UInt(Rs.M)
             for i in range(len(Q)):
                 active = Q.active[i]
 
@@ -607,7 +610,7 @@ if __name__ == "__main__":
         integrator: RestirIntegrator = mi.load_dict(
             {
                 "type": "restirgi",
-                "jacobian": True,
+                "jacobian": False,
                 "bias_correction": False,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
