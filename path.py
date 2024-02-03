@@ -2,7 +2,8 @@ import mitsuba as mi
 import drjit as dr
 import matplotlib.pyplot as plt
 
-mi.set_variant("llvm_ad_rgb")
+if __name__ == "__main__":
+    mi.set_variant("cuda_ad_rgb")
 
 
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
@@ -23,36 +24,7 @@ def drjitstruct(cls):
     return cls
 
 
-@drjitstruct
-class Sample:
-    xv: mi.Point3f
-    nv: mi.Vector3f
-    xs: mi.Point3f
-    ns: mi.Vector3f
-    Lo: mi.Color3f
-    rand: mi.Point3f
-
-
-class Reservoir:
-    z: Sample
-    w = mi.Float32(0)
-    M = mi.Float32(0)
-    W = mi.Float32(0)
-
-    def update(self, sampler: mi.Sampler, s_new: Sample, w_new: mi.Float32):
-        self.w += w_new
-        self.M += 1
-        self.z = dr.select(sampler.next_1d() < w_new / self.w, s_new, self.z)
-
-    def merge(self, sampler: mi.Sampler, r: "Reservoir", p_hat: mi.Float32):
-        M0 = mi.Float32(self.M)
-        self.update(sampler, r.z, p_hat * r.W * r.M)
-        self.M = M0 + r.M
-
-
-class Restir(mi.SamplingIntegrator):
-    reservoir = Reservoir()
-
+class Path(mi.SamplingIntegrator):
     def __init__(self, props: mi.Properties) -> None:
         self.max_depth = props.get("max_depth", def_value=16)
         self.rr_depth = props.get("rr_depth", def_value=4)
@@ -225,94 +197,103 @@ class Restir(mi.SamplingIntegrator):
 
             return result
 
-    def sample(
-        self: mi.SamplingIntegrator,
+    def sample_emitter(
+        self,
+        si: mi.SurfaceInteraction3f,
+        bsdf_ctx: mi.BSDFContext,
+        f: mi.Spectrum,
+        sampler: mi.Sampler,
+        active: mi.Bool,
+    ):
+        bsdf: mi.BSDF = si.bsdf()
+        active_em = active & mi.has_flag(bsdf.flags(), mi.BSDFFlags.All)
+
+        ds, em_weight = scene.sample_emitter_direction(
+            si, sampler.next_2d(), True, active_em
+        )
+        active_em &= dr.neq(ds.pdf, 0.0)
+
+        with dr.resume_grad():
+            ds.d = dr.normalize(ds.p - si.p)
+            em_val = scene.eval_emitter_direction(si, ds, active_em)
+            em_weight = dr.select(dr.neq(ds.pdf, 0), em_val / ds.pdf, 0)
+            dr.disable_grad(ds.d)
+
+        wo = si.to_local(ds.d)
+        bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active_em)
+        bsdf_val = si.to_world_mueller(bsdf_val, -wo, si.wi)
+
+        mis_em = dr.select(ds.delta, 1.0, mis_weight(ds.pdf, bsdf_pdf))
+
+        return f * bsdf_val * em_weight * mis_em
+
+    def direct_emission(
+        self,
+        si: mi.SurfaceInteraction3f,
+        prev_si: mi.SurfaceInteraction3f,
+        prev_bsdf_pdf: mi.Float,
+        prev_bsdf_delta: mi.Bool,
+        f: mi.Spectrum,
+    ):
+        ds = mi.DirectionSample3f(scene, si, prev_si)
+        em_pdf = scene.eval_emitter_direction(prev_si, ds, ~prev_bsdf_delta)
+
+        mis_bsdf = mis_weight(prev_bsdf_pdf, em_pdf)
+
+        with dr.resume_grad():
+            L = f * ds.emitter.eval(si, prev_bsdf_pdf > 0.0) * mis_bsdf
+
+        return L
+
+    def sample_Lo(
+        self,
         scene: mi.Scene,
         sampler: mi.Sampler,
-        ray: mi.RayDifferential3f,
+        si: mi.SurfaceInteraction3f,
         medium: mi.Medium = None,
+        max_depth: int = 128,
+        rr_depth: int = 8,
         active: bool = True,
-    ) -> mi.Color3f:
+    ) -> tuple[mi.Color3f, mi.Bool]:
+        # ----------------------- Primary emission ------------------------
+
+        L = si.emitter(scene, active).eval(si, active)
+
         # --------------------- Configure loop state ----------------------
-        ray = mi.Ray3f(ray)
         f = mi.Spectrum(1.0)
-        L = mi.Spectrum(0.0)
         eta = mi.Float(1.0)
         depth = mi.UInt32(0)
 
         # Variables caching information from the previous bounce
-        prev_si = dr.zeros(mi.SurfaceInteraction3f)
-        prev_bsdf_pdf = mi.Float(1.0)
-        prev_bsdf_delta = mi.Bool(True)
-        active = mi.Bool(active)
         bsdf_ctx = mi.BSDFContext()
+        active = mi.Bool(active)
+        active &= depth < max_depth
 
         loop = mi.Loop(
             "Path Tracer",
             state=lambda: (
                 sampler,
-                ray,
+                si,
                 f,
                 L,
                 eta,
                 depth,
-                prev_si,
-                prev_bsdf_pdf,
-                prev_bsdf_delta,
                 active,
             ),
         )
 
-        loop.set_max_iterations(self.max_depth)
+        loop.set_max_iterations(max_depth)
 
         while loop(active):
-            with dr.resume_grad():
-                si: mi.SurfaceInteraction3f = scene.ray_intersect(
-                    ray, mi.RayFlags.All, coherent=mi.Bool(False)
-                )
-
-            # ---------------------- Direct emission ----------------------
-            ds = mi.DirectionSample3f(scene, si, prev_si)
-            em_pdf = scene.eval_emitter_direction(prev_si, ds, ~prev_bsdf_delta)
-
-            mis_bsdf = mis_weight(prev_bsdf_pdf, em_pdf)
-
-            # L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.) * mis_bsdf, L)
-            with dr.resume_grad():
-                # Le = f * mis_bsdf * ds.emitter.eval(si)
-                L = dr.fma(f, ds.emitter.eval(si, prev_bsdf_pdf > 0.0) * mis_bsdf, L)
-
-            active_next = (depth + 1 < self.max_depth) & si.is_valid()
-
             # ---------------------- Emitter sampling ----------------------
-
-            bsdf: mi.BSDF = si.bsdf(ray)
-            active_em = active_next & mi.has_flag(bsdf.flags(), mi.BSDFFlags.All)
-
-            ds, em_weight = scene.sample_emitter_direction(
-                si, sampler.next_2d(), True, active_em
-            )
-            active_em &= dr.neq(ds.pdf, 0.0)
-
-            with dr.resume_grad():
-                ds.d = dr.normalize(ds.p - si.p)
-                em_val = scene.eval_emitter_direction(si, ds, active_em)
-                em_weight = dr.select(dr.neq(ds.pdf, 0), em_val / ds.pdf, 0)
-                dr.disable_grad(ds.d)
-
-            wo = si.to_local(ds.d)
-            bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active_em)
-            bsdf_val = si.to_world_mueller(bsdf_val, -wo, si.wi)
-
-            mis_em = dr.select(ds.delta, 1.0, mis_weight(ds.pdf, bsdf_pdf))
-
-            L[active_em] = dr.fma(f, bsdf_val * em_weight * mis_em, L)
+            L[active] += self.sample_emitter(si, bsdf_ctx, f, sampler, active)
 
             # ---------------------- BSDF sampling ----------------------
-            s1 = sampler.next_1d()
-            s2 = sampler.next_2d()
+            bsdf = si.bsdf()
 
-            bsdf_sample, bsdf_weight = bsdf.sample(bsdf_ctx, si, s1, s2, active_next)
+            bsdf_sample, bsdf_weight = bsdf.sample(
+                bsdf_ctx, si, sampler.next_1d(), sampler.next_2d(), active
+            )
             bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
 
             ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
@@ -326,42 +307,104 @@ class Restir(mi.SamplingIntegrator):
 
             # ------ Update loop variables based on current interaction ------
 
-            f *= bsdf_weight
-            eta *= bsdf_sample.eta
+            f[active] *= bsdf_weight
+            eta[active] *= bsdf_sample.eta
 
             prev_si = dr.detach(si)
-            prev_bsdf_pdf = bsdf_sample.pdf
-            prev_bsdf_delta = mi.has_flag(bsdf_sample.sampled_type, mi.BSDFFlags.Delta)
+
+            si: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
+
+            active &= si.is_valid()
+
+            # ---------------------- Direct emission ----------------------
+            L[active] += self.direct_emission(
+                si,
+                prev_si,
+                bsdf_sample.pdf,
+                mi.has_flag(bsdf_sample.sampled_type, mi.BSDFFlags.Delta),
+                f,
+            )
 
             # -------------------- Stopping criterion ---------------------
 
-            depth[si.is_valid()] += 1
+            depth[active] += 1
 
             fmax = dr.max(f)
 
             rr_prob = dr.minimum(fmax * dr.sqr(eta), 0.95)
-            rr_active = depth >= self.rr_depth
+            rr_active = depth >= rr_depth
             rr_continue = sampler.next_1d() < rr_prob
 
             f[rr_active] *= dr.rcp(dr.detach(rr_prob))
 
-            active = active_next & (~rr_active | rr_continue) & dr.neq(fmax, 0.0)
+            active = (
+                active
+                & (~rr_active | rr_continue)
+                & dr.neq(fmax, 0.0)
+                & (depth < max_depth)
+            )
 
         return L, dr.neq(depth, 0)
 
+    def sample(
+        self: mi.SamplingIntegrator,
+        scene: mi.Scene,
+        sampler: mi.Sampler,
+        ray: mi.RayDifferential3f,
+        medium: mi.Medium = None,
+        active: bool = True,
+    ) -> tuple[mi.Color3f, mi.Bool]:
+        # Get primary intersection
+        si: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
 
-mi.register_integrator("restir", lambda props: Restir(props))
+        return self.sample_Lo(
+            scene,
+            sampler,
+            si,
+            medium,
+            max_depth=self.max_depth - 1,
+            rr_depth=self.rr_depth,
+            active=active,
+        )
 
-scene = mi.cornell_box()
-scene = mi.load_dict(scene)
-integrator = mi.load_dict(
-    {
-        "type": "restir",
-        "max_depth": 16,
-        "rr_depth": 2,
-    }
-)
 
-img = mi.render(scene, integrator=integrator)
-plt.imshow(mi.util.convert_to_bitmap(img))
-plt.show()
+mi.register_integrator("mypath", lambda props: Path(props))
+
+if __name__ == "__main__":
+    scene = mi.cornell_box()
+    scene = mi.load_dict(scene)
+
+    mypath = mi.load_dict(
+        {
+            "type": "mypath",
+            "max_depth": 16,
+            "rr_depth": 4,
+        }
+    )
+
+    path = mi.load_dict(
+        {
+            "type": "path",
+            "max_depth": 16,
+            "rr_depth": 4,
+        }
+    )
+
+    img = mi.render(scene, integrator=mypath, spp=128)
+
+    ref = mi.render(scene, integrator=path, spp=128)
+
+    diff = dr.abs(img - ref)
+
+    mse = dr.mean_nested(dr.sqr(diff))
+    print(f"{mse=}")
+
+    fig, ax = plt.subplots(1, 3, figsize=(9, 3))
+
+    ax[0].imshow(mi.util.convert_to_bitmap(img))
+    ax[0].set_title("img")
+    ax[1].imshow(mi.util.convert_to_bitmap(ref))
+    ax[1].set_title("ref")
+    ax[2].imshow(mi.util.convert_to_bitmap(diff))
+    ax[2].set_title("diff")
+    plt.show()
