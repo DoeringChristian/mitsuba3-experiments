@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
+    dr.set_flag(dr.JitFlag.KernelHistory, True)
 
 
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
@@ -390,9 +391,26 @@ if __name__ == "__main__":
         }
     )
 
+    dr.kernel_history_clear()
     img = mi.render(scene, integrator=mypath, spp=128)
+    kernels = dr.kernel_history()
+    optix_kernels = [
+        kernel
+        for kernel in kernels
+        if "uses_optix" in kernel and kernel["uses_optix"] == 1
+    ]
+    print(f"My Path: {optix_kernels}")
+    print("")
 
+    dr.kernel_history_clear()
     ref = mi.render(scene, integrator=path, spp=128)
+    kernels = dr.kernel_history()
+    optix_kernels = [
+        kernel
+        for kernel in kernels
+        if "uses_optix" in kernel and kernel["uses_optix"] == 1
+    ]
+    print(f"Default Path: {optix_kernels}")
 
     diff = dr.abs(img - ref)
 
