@@ -201,12 +201,13 @@ class Path(mi.SamplingIntegrator):
     def sample_emitter(
         self,
         si: mi.SurfaceInteraction3f,
+        ray: mi.RayDifferential3f,
         bsdf_ctx: mi.BSDFContext,
         f: mi.Spectrum,
         sampler: mi.Sampler,
         active: mi.Bool,
     ):
-        bsdf: mi.BSDF = si.bsdf()
+        bsdf: mi.BSDF = si.bsdf(ray)
         active_em = active & mi.has_flag(bsdf.flags(), mi.BSDFFlags.All)
 
         ds, em_weight = scene.sample_emitter_direction(
@@ -251,6 +252,7 @@ class Path(mi.SamplingIntegrator):
         scene: mi.Scene,
         sampler: mi.Sampler,
         si: mi.SurfaceInteraction3f,
+        ray: mi.RayDifferential3f,
         medium: mi.Medium = None,
         max_depth: int = 128,
         rr_depth: int = 8,
@@ -265,6 +267,9 @@ class Path(mi.SamplingIntegrator):
         eta = mi.Float(1.0)
         depth = mi.UInt32(0)
 
+        # The ray used to intersect with si
+        ray = mi.Ray3f(ray)
+
         # Variables caching information from the previous bounce
         bsdf_ctx = mi.BSDFContext()
         active = mi.Bool(active)
@@ -275,6 +280,7 @@ class Path(mi.SamplingIntegrator):
             state=lambda: (
                 sampler,
                 si,
+                ray,
                 f,
                 L,
                 eta,
@@ -287,10 +293,10 @@ class Path(mi.SamplingIntegrator):
 
         while loop(active):
             # ---------------------- Emitter sampling ----------------------
-            L[active] += self.sample_emitter(si, bsdf_ctx, f, sampler, active)
+            L[active] += self.sample_emitter(si, ray, bsdf_ctx, f, sampler, active)
 
             # ---------------------- BSDF sampling ----------------------
-            bsdf = si.bsdf()
+            bsdf = si.bsdf(ray)
 
             bsdf_sample, bsdf_weight = bsdf.sample(
                 bsdf_ctx, si, sampler.next_1d(), sampler.next_2d(), active
@@ -362,6 +368,7 @@ class Path(mi.SamplingIntegrator):
             scene,
             sampler,
             si,
+            ray,
             medium,
             max_depth=self.max_depth - 1,
             rr_depth=self.rr_depth,
