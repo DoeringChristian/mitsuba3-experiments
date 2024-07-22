@@ -24,7 +24,6 @@ if __name__ == "__main__":
 
     def specular(self, si: mi.SurfaceInteraction3f) -> mi.Color3f:
         params = mi.traverse(self)
-        print(f"{dir(self)=}")
 
         sr = "specular_reflectance"
         if f"{sr}.data" in params and f"{sr}.to_uv":
