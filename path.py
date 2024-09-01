@@ -71,7 +71,7 @@ class Path(mi.SamplingIntegrator):
         if ray.has_differentials:
             ray.scale_differential(diff_scale_factor)
 
-        medium = sensor.medium()
+        medium = sensor.get_medium()
 
         spec, valid = self.sample(scene, sampler, ray, medium, active)
 
@@ -212,12 +212,12 @@ class Path(mi.SamplingIntegrator):
         ds, em_weight = scene.sample_emitter_direction(
             si, sampler.next_2d(), True, active_em
         )
-        active_em &= dr.neq(ds.pdf, 0.0)
+        active_em &= ds.pdf != 0.0
 
         with dr.resume_grad():
             ds.d = dr.normalize(ds.p - si.p)
             em_val = scene.eval_emitter_direction(si, ds, active_em)
-            em_weight = dr.select(dr.neq(ds.pdf, 0), em_val / ds.pdf, 0)
+            em_weight = dr.select((ds.pdf != 0), em_val / ds.pdf, 0)
             dr.disable_grad(ds.d)
 
         wo = si.to_local(ds.d)
@@ -246,6 +246,7 @@ class Path(mi.SamplingIntegrator):
 
         return L
 
+    @dr.syntax
     def sample_Lo(
         self,
         scene: mi.Scene,
@@ -270,22 +271,22 @@ class Path(mi.SamplingIntegrator):
         active = mi.Bool(active)
         active &= depth < max_depth
 
-        loop = mi.Loop(
-            "Path Tracer",
-            state=lambda: (
-                sampler,
-                si,
-                f,
-                L,
-                eta,
-                depth,
-                active,
-            ),
-        )
+        # loop = mi.Loop(
+        #     "Path Tracer",
+        #     state=lambda: (
+        #         sampler,
+        #         si,
+        #         f,
+        #         L,
+        #         eta,
+        #         depth,
+        #         active,
+        #     ),
+        # )
+        #
+        # loop.set_max_iterations(max_depth)
 
-        loop.set_max_iterations(max_depth)
-
-        while loop(active):
+        while dr.hint(active, max_iterations=-1):
             # ---------------------- Emitter sampling ----------------------
             L[active] += self.sample_emitter(si, bsdf_ctx, f, sampler, active)
 
@@ -343,11 +344,11 @@ class Path(mi.SamplingIntegrator):
             active = (
                 active
                 & (~rr_active | rr_continue)
-                & dr.neq(fmax, 0.0)
+                & (fmax != 0.0)
                 & (depth < max_depth)
             )
 
-        return L, dr.neq(depth, 0)
+        return L, (depth != 0)
 
     def sample(
         self: mi.SamplingIntegrator,
@@ -418,7 +419,7 @@ if __name__ == "__main__":
 
     diff = dr.abs(img - ref)
 
-    mse = dr.mean_nested(dr.sqr(diff))
+    mse = dr.mean(dr.sqr(diff), axis=None)
     print(f"{mse=}")
 
     fig, ax = plt.subplots(1, 3, figsize=(9, 3))
