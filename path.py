@@ -16,15 +16,6 @@ def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
     return dr.detach(dr.select(pdf_a > 0, a2 / dr.fma(pdf_b, pdf_b, a2), 0), True)
 
 
-def drjitstruct(cls):
-    annotations = cls.__dict__.get("__annotations__", {})
-    drjit_struct = {}
-    for name, type in annotations.items():
-        drjit_struct[name] = type
-    cls.DRJIT_STRUCT = drjit_struct
-    return cls
-
-
 class Path(mi.SamplingIntegrator):
     def __init__(self, props: mi.Properties) -> None:
         self.max_depth = props.get("max_depth", def_value=16)
@@ -200,6 +191,7 @@ class Path(mi.SamplingIntegrator):
 
     def sample_emitter(
         self,
+        scene: mi.Scene,
         si: mi.SurfaceInteraction3f,
         bsdf_ctx: mi.BSDFContext,
         f: mi.Spectrum,
@@ -230,6 +222,7 @@ class Path(mi.SamplingIntegrator):
 
     def direct_emission(
         self,
+        scene: mi.Scene,
         si: mi.SurfaceInteraction3f,
         prev_si: mi.SurfaceInteraction3f,
         prev_bsdf_pdf: mi.Float,
@@ -271,24 +264,9 @@ class Path(mi.SamplingIntegrator):
         active = mi.Bool(active)
         active &= depth < max_depth
 
-        # loop = mi.Loop(
-        #     "Path Tracer",
-        #     state=lambda: (
-        #         sampler,
-        #         si,
-        #         f,
-        #         L,
-        #         eta,
-        #         depth,
-        #         active,
-        #     ),
-        # )
-        #
-        # loop.set_max_iterations(max_depth)
-
         while dr.hint(active, max_iterations=-1):
             # ---------------------- Emitter sampling ----------------------
-            L[active] += self.sample_emitter(si, bsdf_ctx, f, sampler, active)
+            L[active] += self.sample_emitter(scene, si, bsdf_ctx, f, sampler, active)
 
             # ---------------------- BSDF sampling ----------------------
             bsdf = si.bsdf()
@@ -322,6 +300,7 @@ class Path(mi.SamplingIntegrator):
 
             # ---------------------- Direct emission ----------------------
             L[active] += self.direct_emission(
+                scene,
                 si,
                 prev_si,
                 bsdf_sample.pdf,
