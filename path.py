@@ -299,7 +299,7 @@ class Path(mi.SamplingIntegrator):
             active &= si.is_valid()
 
             # ---------------------- Direct emission ----------------------
-            L[active] += self.direct_emission(
+            L += self.direct_emission(
                 scene,
                 si,
                 prev_si,
