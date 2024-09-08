@@ -32,5 +32,5 @@ def concat(arrays: list):
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
 
-    result = concat([mi.Float(1, 2, 3), mi.Float(1, 2)])
+    result = concat([mi.Float(1, 2, 3), mi.Float(1, 2), mi.Float(10, 8, 9, 20)])
     print(f"{result=}")
