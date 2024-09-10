@@ -29,7 +29,7 @@ def concat_gather(arrays: list):
     return final_array
 
 
-def concat_scatter(arrays):
+def concat_scatter(arrays: list):
     final_width = 0
     for array in arrays:
         final_width += dr.width(array)
