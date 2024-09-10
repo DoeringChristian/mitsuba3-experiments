@@ -4,7 +4,7 @@ import mitsuba as mi
 import drjit as dr
 
 
-def concat(arrays: list):
+def concat_gather(arrays: list):
     final_width = 0
     for array in arrays:
         final_width += dr.width(array)
@@ -29,8 +29,35 @@ def concat(arrays: list):
     return final_array
 
 
+def concat_scatter(arrays):
+    final_width = 0
+    for array in arrays:
+        final_width += dr.width(array)
+
+    dst = dr.zeros(type(arrays[0]), shape=final_width)
+    count = 0
+    for array in arrays:
+        n = dr.shape(array)[-1]
+        i = dr.arange(mi.UInt32, count, count + n)
+        dr.scatter(dst, array, i, i < final_width)
+
+        count += n
+    return dst
+
+
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
 
-    result = concat([mi.Float(1, 2, 3), mi.Float(1, 2), mi.Float(10, 8, 9, 20)])
-    print(f"{result=}")
+    sampler1: mi.Sampler = mi.load_dict({"type": "independent"})
+    sampler1.seed(0, 126)
+    sampler2: mi.Sampler = mi.load_dict({"type": "independent"})
+    sampler2.seed(1, 2)
+
+    a = sampler1.next_1d()
+    b = sampler2.next_1d()
+
+    result = concat([a, b])
+
+    result2 = concat_scatter([a, b])
+
+    assert dr.all(result == result2)
