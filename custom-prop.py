@@ -13,7 +13,6 @@ if __name__ == "__main__":
 
     def is_dynamic(self, _) -> mi.Bool:
         if "dynamic" in self.id():
-            print("return true")
             return mi.Bool(True)
         return mi.Bool(False)
 
