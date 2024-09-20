@@ -49,7 +49,6 @@ class MetropolisSampler(mi.Sampler):
         self.wavefront_size = wavefront_size
 
     def initial_1d(self, active: mi.Bool) -> mi.Float:
-        return dr.opaque(mi.Float, 0.5, self.wavefront_size)
         return self.independent.next_1d(active)
 
     def next_1d(self, active: mi.Bool = True) -> mi.Float:
@@ -121,17 +120,17 @@ mean = 0.5
 
 def target(x):
 
-    # def f(x):
-    #     return gaussian(x, 0.2, 0.01) + gaussian(x, 0.7, 0.1)
-    #
-    # between_0_1 = np.logical_and(0.0 < x, x < 1.0)
-    # outside_05_06 = np.logical_or(x < 0.5, 0.6 < x)
-    #
-    # range = np.logical_and(between_0_1, outside_05_06)
-    #
-    # target = np.select([range], [f(x)], 0)
+    def f(x):
+        return gaussian(x, 0.2, 0.01) + gaussian(x, 0.7, 0.1)
 
-    return gaussian(x, mean, std)
+    between_0_1 = np.logical_and(0.0 < x, x < 1.0)
+    outside_05_06 = np.logical_or(x < 0.5, 0.6 < x)
+
+    range = np.logical_and(between_0_1, outside_05_06)
+
+    target = np.select([range], [f(x)], 0)
+
+    return target
 
 
 def Dkl(p, q):
@@ -225,13 +224,13 @@ def test(name: str, iterations, batch_size, log_interval, bins, sampler) -> Resu
 
 
 if __name__ == "__main__":
-    iterations = 2_000
+    iterations = 1_000
     batch_size = 16384
     bins = 128
     dr.set_flag(dr.JitFlag.KernelHistory, True)
 
-    sampler = MetropolisSampler(0.005, 0.00)
-    metropolis = test("metropolis", iterations, batch_size, 20, bins, sampler)
+    sampler = MetropolisSampler(0.01, 0.01)
+    metropolis = test("metropolis", iterations, batch_size, 10, bins, sampler)
     metropolis = metropolis.numpy()
 
     # print(f"{metropolis=}")
