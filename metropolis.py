@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tqdm
 from scipy import stats
+from dataclasses import dataclass, field
+from matplotlib.lines import Line2D
 
 
 if __name__ == "__main__":
@@ -47,6 +49,7 @@ class MetropolisSampler(mi.Sampler):
         self.wavefront_size = wavefront_size
 
     def initial_1d(self, active: mi.Bool) -> mi.Float:
+        return dr.opaque(mi.Float, 0.5, self.wavefront_size)
         return self.independent.next_1d(active)
 
     def next_1d(self, active: mi.Bool = True) -> mi.Float:
@@ -112,19 +115,23 @@ def gaussian(x, mu, sig):
     )
 
 
+std = 0.1
+mean = 0.5
+
+
 def target(x):
 
-    def f(x):
-        return gaussian(x, 0.2, 0.01) + gaussian(x, 0.7, 0.1)
+    # def f(x):
+    #     return gaussian(x, 0.2, 0.01) + gaussian(x, 0.7, 0.1)
+    #
+    # between_0_1 = np.logical_and(0.0 < x, x < 1.0)
+    # outside_05_06 = np.logical_or(x < 0.5, 0.6 < x)
+    #
+    # range = np.logical_and(between_0_1, outside_05_06)
+    #
+    # target = np.select([range], [f(x)], 0)
 
-    between_0_1 = np.logical_and(0.0 < x, x < 1.0)
-    outside_05_06 = np.logical_or(x < 0.5, 0.6 < x)
-
-    range = np.logical_and(between_0_1, outside_05_06)
-
-    target = np.select([range], [f(x)], 0)
-
-    return target
+    return gaussian(x, mean, std)
 
 
 def Dkl(p, q):
@@ -141,14 +148,32 @@ def KL(P: np.ndarray, Q: np.ndarray) -> float:
     return divergence
 
 
-def test(name: str, iterations, n, bins, sampler):
+@dataclass(init=True)
+class Result:
+    it: list | np.ndarray = field(default_factory=list)
+    kl: list | np.ndarray = field(default_factory=list)
+    mean: list | np.ndarray = field(default_factory=list)
+    var: list | np.ndarray = field(default_factory=list)
+    std: list | np.ndarray = field(default_factory=list)
+
+    def numpy(self) -> "Result":
+        result = Result()
+        result.it = np.array(self.it)
+        result.kl = np.array(self.kl)
+        result.mean = np.array(self.mean)
+        result.var = np.array(self.var)
+        result.std = np.array(self.std)
+        return result
+
+
+def test(name: str, iterations, batch_size, log_interval, bins, sampler) -> Result:
     x_ref = np.linspace(0, 1, 1000)
     y_ref = target(x_ref)
     y_ref = y_ref / np.mean(y_ref)
 
-    kl_distances = []
+    result = Result()
 
-    sampler.seed(0, n)
+    sampler.seed(0, batch_size)
     iterator = tqdm.tqdm(range(iterations))
     for i in iterator:
         dr.kernel_history_clear()
@@ -161,12 +186,25 @@ def test(name: str, iterations, n, bins, sampler):
         sampler.schedule_state()
         dr.eval()
 
-        if i % 10 == 0:
-            kde = stats.gaussian_kde(x)
+        if i % log_interval == 0:
+
+            mean = np.mean(x)
+            var = np.mean((x - mean) ** 2)
+            std = np.sqrt(var)
+
             plt.clf()
             plt.hist(x, bins=bins, density=True, label="Metropolis Histogram")
             plt.plot(x_ref, y_ref, label="Ref")
-            plt.plot(x_ref, kde(x_ref), label="Metropolis KDE")
+            plt.vlines(
+                [mean + std, mean - std],
+                0,
+                1,
+                transform=plt.gca().get_xaxis_transform(),
+                colors="r",
+                label="std deviation",
+            )
+            # kde = stats.gaussian_kde(x)
+            # plt.plot(x_ref, kde(x_ref), label="Metropolis KDE")
             plt.legend()
             os.makedirs(f"out/{name}", exist_ok=True)
             plt.savefig(f"out/{name}/{i}.svg")
@@ -177,36 +215,51 @@ def test(name: str, iterations, n, bins, sampler):
             dkl = KL(sample_pdf, target_pdf)
             iterator.set_postfix({"dkl": dkl})
 
-            kl_distances.append((i, dkl))
+            result.it.append(i)
+            result.kl.append(dkl)
+            result.mean.append(mean)
+            result.var.append(mean)
+            result.std.append(std)
 
-    it, kl_distances = zip(*kl_distances)
-
-    plt.clf()
-    plt.plot(it, kl_distances)
-    plt.xlabel("iteration")
-    plt.ylabel("$D_{KL}$")
-    plt.yscale("log")
-    plt.savefig(f"out/{name}/dkl.svg")
-
-    return it, kl_distances
+    return result
 
 
 if __name__ == "__main__":
-    iterations = 1_000
-    n = 16384
+    iterations = 10_000
+    batch_size = 16384
     bins = 128
     dr.set_flag(dr.JitFlag.KernelHistory, True)
 
-    sampler = MetropolisSampler(0.001, 0.01)
-    metropolis = test("metropolis", iterations, n, bins, sampler)
+    sampler = MetropolisSampler(0.005, 0.00)
+    metropolis = test("metropolis", iterations, batch_size, 100, bins, sampler)
+    metropolis = metropolis.numpy()
 
     # print(f"{metropolis=}")
     # print(f"{jump_restore=}")
 
     plt.clf()
-    plt.plot(metropolis[0], metropolis[1], label="Metropolis")
+    plt.plot(metropolis.it, metropolis.kl, label="Metropolis")
     plt.xlabel("iteration")
     plt.ylabel("$D_{KL}$")
     plt.yscale("log")
     plt.legend()
     plt.savefig("out/dkl.svg")
+
+    plt.clf()
+    plt.plot(metropolis.it, metropolis.mean + metropolis.std, color="C0")
+    plt.plot(metropolis.it, metropolis.mean - metropolis.std, color="C0")
+    plt.plot([0, metropolis.it[-1]], [mean + std, mean + std], color="C1")
+    plt.plot([0, metropolis.it[-1]], [mean - std, mean - std], color="C1")
+    plt.xlabel("iteration")
+    plt.ylabel("Standard Deviation")
+    plt.legend(
+        [
+            Line2D([0], [0], color="C0"),
+            Line2D([0], [0], color="C1"),
+        ],
+        [
+            "Metropolis",
+            "Target",
+        ],
+    )
+    plt.savefig("out/std.svg")
