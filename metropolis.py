@@ -225,13 +225,13 @@ def test(name: str, iterations, batch_size, log_interval, bins, sampler) -> Resu
 
 
 if __name__ == "__main__":
-    iterations = 10_000
+    iterations = 2_000
     batch_size = 16384
     bins = 128
     dr.set_flag(dr.JitFlag.KernelHistory, True)
 
     sampler = MetropolisSampler(0.005, 0.00)
-    metropolis = test("metropolis", iterations, batch_size, 100, bins, sampler)
+    metropolis = test("metropolis", iterations, batch_size, 20, bins, sampler)
     metropolis = metropolis.numpy()
 
     # print(f"{metropolis=}")
