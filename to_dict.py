@@ -5,27 +5,23 @@ if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
 
 
-def to_dict(scene: mi.Scene) -> dict:
-    result = {
-        "type": "scene",
-    }
+def to_dict(obj: mi.Object):
+    id = obj.id()
+    tp = obj.class_().name()
 
-    for shape in scene.shapes():
-        id = shape.id()
-        result[id] = shape
-
-    for emitter in scene.emitters():
-        id = emitter.id()
-        result[id] = emitter
-
-    for sensor in scene.sensors():
-        id = sensor.id()
-        result[id] = sensor
-
-    id = scene.integrator().id()
-    result[id] = scene.integrator()
-
-    return result
+    if tp == "Scene":
+        children = [
+            *scene.shapes(),
+            *scene.emitters(),
+            *scene.sensors(),
+            scene.integrator(),
+        ]
+        return {
+            "type": "scene",
+            **{child.id(): to_dict(child) for child in children},
+        }
+    else:
+        return obj
 
 
 if __name__ == "__main__":
