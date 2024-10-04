@@ -5,23 +5,19 @@ if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
 
 
-def to_dict(obj: mi.Object):
-    id = obj.id()
-    tp = obj.class_().name()
+def to_dict(scene: mi.Scene):
+    assert isinstance(scene, mi.Scene)
 
-    if tp == "Scene":
-        children = [
-            *scene.shapes(),
-            *scene.emitters(),
-            *scene.sensors(),
-            scene.integrator(),
-        ]
-        return {
-            "type": "scene",
-            **{child.id(): to_dict(child) for child in children},
-        }
-    else:
-        return obj
+    children = [
+        *scene.shapes(),
+        *scene.emitters(),
+        *scene.sensors(),
+        scene.integrator(),
+    ]
+    return {
+        "type": "scene",
+        **{child.id(): child for child in children},
+    }
 
 
 if __name__ == "__main__":
