@@ -244,12 +244,6 @@ class Path(mi.SamplingIntegrator):
 
             # -------------------- Stopping criterion ---------------------
 
-            # NOTE:Mitsuba3 performs russian roulette before the direct
-            # emission of the next surface interaction. I'm wondering why this
-            # is correct? Should we not always add the direct emission to the
-            # estimate of the scattered radiance of the first interaction?
-            # It might also just be convention?
-
             fmax = dr.max(f)
 
             rr_prob = dr.minimum(fmax * dr.square(eta), 0.95)
