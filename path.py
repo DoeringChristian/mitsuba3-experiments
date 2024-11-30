@@ -13,7 +13,9 @@ def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
     of two sampling strategies according to the power heuristic.
     """
     a2 = dr.square(pdf_a)
-    return dr.detach(dr.select(pdf_a > 0, a2 / dr.fma(pdf_b, pdf_b, a2), 0), True)
+    b2 = dr.square(pdf_b)
+    w = a2 / (a2 + b2)
+    return dr.detach(dr.select(dr.isfinite(w), w, 0))
 
 
 class Path(mi.SamplingIntegrator):
@@ -22,222 +24,172 @@ class Path(mi.SamplingIntegrator):
         self.rr_depth = props.get("rr_depth", def_value=4)
         super().__init__(props)
 
-    def render_sample(
-        self,
-        scene: mi.Scene,
-        sensor: mi.Sensor,
-        sampler: mi.Sampler,
-        block: mi.ImageBlock,
-        aovs: list[mi.Float32],
-        pos: mi.Vector2f,
-        diff_scale_factor: mi.ScalarFloat32,
-        active: mi.Bool = True,
-    ):
-        film = sensor.film()
-        has_alpha = mi.has_flag(film.flags(), mi.FilmFlags.Alpha)
-        box_filter = film.rfilter().is_box_filter()
-
-        scale = 1.0 / mi.ScalarVector2f(film.crop_size())
-        offset = -mi.ScalarVector2f(film.crop_offset()) * scale
-
-        sample_pos = pos + sampler.next_2d(active)
-        adjusted_pos = dr.fma(sample_pos, scale, offset)
-
-        apperature_sample = mi.Point2f(0.5)
-        if sensor.needs_aperture_sample():
-            apperature_sample = sampler.next_2d(active)
-
-        time = sensor.shutter_open()
-        if sensor.shutter_open_time() > 0.0:
-            time += sampler.next_1d(active) * sensor.shutter_open_time()
-
-        wavelength_sample = 0.0
-        if mi.is_spectral:
-            wavelength_sample = sampler.next_1d(active)
-
-        ray, ray_weight = sensor.sample_ray_differential(
-            time, wavelength_sample, adjusted_pos, apperature_sample
-        )
-
-        if ray.has_differentials:
-            ray.scale_differential(diff_scale_factor)
-
-        medium = sensor.get_medium()
-
-        spec, valid, _ = self.sample(scene, sampler, ray, medium, active)
-
-        spec_u = mi.unpolarized_spectrum(ray_weight * spec)
-
-        if mi.has_flag(film.flags(), mi.FilmFlags.Special):
-            film.prepare_sample(
-                spec_u,
-                ray.wavelengths,
-                aovs,
-                1.0,
-                dr.select(valid, mi.Float32(1.0), mi.Float32(0.0)),
-                valid,
-            )
-        else:
-            rgb = mi.Color3f()
-            if mi.is_spectral:
-                rgb = mi.spectrum_list_to_srgb(spec_u, ray.wavelengths, active)
-            elif mi.is_monochromatic:
-                rgb = spec_u.x
-            else:
-                rgb = spec_u
-
-            aovs[0] = rgb.x
-            aovs[1] = rgb.y
-            aovs[2] = rgb.z
-
-            if has_alpha:
-                aovs[3] = dr.select(valid, mi.Float32(1.0), mi.Float32(0.0))
-                aovs[4] = 1.0
-            else:
-                aovs[3] = 1.0
-
-        block.put(pos if box_filter else sample_pos, aovs, active)
-
-    def render(
-        self,
-        scene: mi.Scene,
-        sensor: mi.Sensor,
-        seed: int,
-        spp: int,
-        develop: bool,
-        evaluate: bool,
-    ) -> mi.TensorXf:
-        m_stop = False
-        m_samples_per_pass = -1
-
-        film = sensor.film()
-        film_size = film.crop_size()
-        if film.sample_border():
-            film_size += 2 * film.rfilter().border_size()
-
-        sampler = sensor.sampler()
-
-        if spp > 0:
-            sampler.set_sample_count(spp)
-        spp = sampler.sample_count()
-
-        spp_per_pass = spp if m_samples_per_pass == -1 else min(m_samples_per_pass, spp)
-
-        if spp % spp_per_pass != 0:
-            raise Exception(
-                "sample_count (%d) must be a multiple of spp_per_pass (%d).",
-                spp,
-                spp_per_pass,
-            )
-
-        n_passes = spp / spp_per_pass
-
-        n_channels = film.prepare(self.aov_names())
-
-        result = mi.TensorXf()
-
-        if dr.is_jit_v(mi.Float):
-            if n_passes > 1 and not evaluate:
-                evaluate = True
-
-            wavefront_size = film_size.x * film_size.y * spp_per_pass
-
-            sampler.set_samples_per_wavefront(spp_per_pass)
-
-            sampler.seed(seed, int(wavefront_size))
-
-            block: mi.ImageBlock = film.create_block()
-            block.set_offset(film.crop_offset())
-
-            block.set_coalesce(block.coalesce() & spp_per_pass >= 4)
-
-            idx = dr.arange(mi.UInt32, wavefront_size)
-            idx //= spp_per_pass
-
-            pos = mi.Vector2f()
-            pos.y = idx // film_size.x
-            pos.x = idx % film_size.x
-
-            if film.sample_border():
-                pos -= film.rfilter().border_size()
-
-            pos += film.crop_offset()
-
-            diff_scale_factor = dr.rsqrt(spp)
-
-            aovs = [mi.Float32] * n_channels
-
-            for i in range(int(n_passes)):
-                self.render_sample(
-                    scene, sensor, sampler, block, aovs, pos, diff_scale_factor
-                )
-                if n_passes > 1:
-                    sampler.advance()
-                    sampler.schedule_state()
-                    dr.eval(block.tensor())
-
-            film.put_block(block)
-
-            if develop:
-                result = film.develop()
-                dr.schedule(result)
-            else:
-                film.schedule_storage()
-
-            if evaluate:
-                dr.eval()
-
-            return result
-
-    def sample_emitter(
-        self,
-        scene: mi.Scene,
-        si: mi.SurfaceInteraction3f,
-        bsdf_ctx: mi.BSDFContext,
-        f: mi.Spectrum,
-        sampler: mi.Sampler,
-        active: mi.Bool,
-    ):
-        bsdf: mi.BSDF = si.bsdf()
-        active_em = active & mi.has_flag(bsdf.flags(), mi.BSDFFlags.All)
-
-        ds, em_weight = scene.sample_emitter_direction(
-            si, sampler.next_2d(), True, active_em
-        )
-        active_em &= ds.pdf != 0.0
-
-        with dr.resume_grad():
-            ds.d = dr.normalize(ds.p - si.p)
-            em_val = scene.eval_emitter_direction(si, ds, active_em)
-            em_weight = dr.select((ds.pdf != 0), em_val / ds.pdf, 0)
-            dr.disable_grad(ds.d)
-
-        wo = si.to_local(ds.d)
-        bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active_em)
-        bsdf_val = si.to_world_mueller(bsdf_val, -wo, si.wi)
-
-        mis_em = dr.select(ds.delta, 1.0, mis_weight(ds.pdf, bsdf_pdf))
-
-        return f * bsdf_val * em_weight * mis_em
-
-    def direct_emission(
-        self,
-        scene: mi.Scene,
-        si: mi.SurfaceInteraction3f,
-        si2: mi.SurfaceInteraction3f,
-        bsdf_pdf: mi.Float,
-        bsdf_delta: mi.Bool,
-        f: mi.Spectrum,
-    ):
-        ds = mi.DirectionSample3f(scene, si2, si)
-        em_pdf = scene.eval_emitter_direction(si, ds, ~bsdf_delta)
-
-        mis_bsdf = mis_weight(bsdf_pdf, em_pdf)
-
-        with dr.resume_grad():
-            L = f * ds.emitter.eval(si2, bsdf_pdf > 0.0) * mis_bsdf
-
-        return L
+    # def render_sample(
+    #     self,
+    #     scene: mi.Scene,
+    #     sensor: mi.Sensor,
+    #     sampler: mi.Sampler,
+    #     block: mi.ImageBlock,
+    #     aovs: list[mi.Float32],
+    #     pos: mi.Vector2f,
+    #     diff_scale_factor: mi.ScalarFloat32,
+    #     active: mi.Bool = True,
+    # ):
+    #     film = sensor.film()
+    #     has_alpha = mi.has_flag(film.flags(), mi.FilmFlags.Alpha)
+    #     box_filter = film.rfilter().is_box_filter()
+    #
+    #     scale = 1.0 / mi.ScalarVector2f(film.crop_size())
+    #     offset = -mi.ScalarVector2f(film.crop_offset()) * scale
+    #
+    #     sample_pos = pos + sampler.next_2d(active)
+    #     adjusted_pos = dr.fma(sample_pos, scale, offset)
+    #
+    #     apperature_sample = mi.Point2f(0.5)
+    #     if sensor.needs_aperture_sample():
+    #         apperature_sample = sampler.next_2d(active)
+    #
+    #     time = sensor.shutter_open()
+    #     if sensor.shutter_open_time() > 0.0:
+    #         time += sampler.next_1d(active) * sensor.shutter_open_time()
+    #
+    #     wavelength_sample = 0.0
+    #     if mi.is_spectral:
+    #         wavelength_sample = sampler.next_1d(active)
+    #
+    #     ray, ray_weight = sensor.sample_ray_differential(
+    #         time, wavelength_sample, adjusted_pos, apperature_sample
+    #     )
+    #
+    #     if ray.has_differentials:
+    #         ray.scale_differential(diff_scale_factor)
+    #
+    #     medium = sensor.get_medium()
+    #
+    #     spec, valid, _ = self.sample(scene, sampler, ray, medium, active)
+    #
+    #     spec_u = mi.unpolarized_spectrum(ray_weight * spec)
+    #
+    #     if mi.has_flag(film.flags(), mi.FilmFlags.Special):
+    #         film.prepare_sample(
+    #             spec_u,
+    #             ray.wavelengths,
+    #             aovs,
+    #             1.0,
+    #             dr.select(valid, mi.Float32(1.0), mi.Float32(0.0)),
+    #             valid,
+    #         )
+    #     else:
+    #         rgb = mi.Color3f()
+    #         if mi.is_spectral:
+    #             rgb = mi.spectrum_list_to_srgb(spec_u, ray.wavelengths, active)
+    #         elif mi.is_monochromatic:
+    #             rgb = spec_u.x
+    #         else:
+    #             rgb = spec_u
+    #
+    #         aovs[0] = rgb.x
+    #         aovs[1] = rgb.y
+    #         aovs[2] = rgb.z
+    #
+    #         if has_alpha:
+    #             aovs[3] = dr.select(valid, mi.Float32(1.0), mi.Float32(0.0))
+    #             aovs[4] = 1.0
+    #         else:
+    #             aovs[3] = 1.0
+    #
+    #     block.put(pos if box_filter else sample_pos, aovs, active)
+    #
+    # def render(
+    #     self,
+    #     scene: mi.Scene,
+    #     sensor: mi.Sensor,
+    #     seed: int,
+    #     spp: int,
+    #     develop: bool,
+    #     evaluate: bool,
+    # ) -> mi.TensorXf:
+    #     m_stop = False
+    #     m_samples_per_pass = -1
+    #
+    #     film = sensor.film()
+    #     film_size = film.crop_size()
+    #     if film.sample_border():
+    #         film_size += 2 * film.rfilter().border_size()
+    #
+    #     sampler = sensor.sampler()
+    #
+    #     if spp > 0:
+    #         sampler.set_sample_count(spp)
+    #     spp = sampler.sample_count()
+    #
+    #     spp_per_pass = spp if m_samples_per_pass == -1 else min(m_samples_per_pass, spp)
+    #
+    #     if spp % spp_per_pass != 0:
+    #         raise Exception(
+    #             "sample_count (%d) must be a multiple of spp_per_pass (%d).",
+    #             spp,
+    #             spp_per_pass,
+    #         )
+    #
+    #     n_passes = spp / spp_per_pass
+    #
+    #     n_channels = film.prepare(self.aov_names())
+    #
+    #     result = mi.TensorXf()
+    #
+    #     if dr.is_jit_v(mi.Float):
+    #         if n_passes > 1 and not evaluate:
+    #             evaluate = True
+    #
+    #         wavefront_size = film_size.x * film_size.y * spp_per_pass
+    #
+    #         sampler.set_samples_per_wavefront(spp_per_pass)
+    #
+    #         sampler.seed(seed, int(wavefront_size))
+    #
+    #         block: mi.ImageBlock = film.create_block()
+    #         block.set_offset(film.crop_offset())
+    #
+    #         block.set_coalesce(block.coalesce() & spp_per_pass >= 4)
+    #
+    #         idx = dr.arange(mi.UInt32, wavefront_size)
+    #         idx //= spp_per_pass
+    #
+    #         pos = mi.Vector2f()
+    #         pos.y = idx // film_size.x
+    #         pos.x = idx % film_size.x
+    #
+    #         if film.sample_border():
+    #             pos -= film.rfilter().border_size()
+    #
+    #         pos += film.crop_offset()
+    #
+    #         diff_scale_factor = dr.rsqrt(spp)
+    #
+    #         aovs = [mi.Float32] * n_channels
+    #
+    #         for i in range(int(n_passes)):
+    #             self.render_sample(
+    #                 scene, sensor, sampler, block, aovs, pos, diff_scale_factor
+    #             )
+    #             if n_passes > 1:
+    #                 sampler.advance()
+    #                 sampler.schedule_state()
+    #                 dr.eval(block.tensor())
+    #
+    #         film.put_block(block)
+    #
+    #         if develop:
+    #             result = film.develop()
+    #             dr.schedule(result)
+    #         else:
+    #             film.schedule_storage()
+    #
+    #         if evaluate:
+    #             dr.eval()
+    #
+    #         return result
 
     @dr.syntax
     def sample_Lo(
@@ -245,6 +197,7 @@ class Path(mi.SamplingIntegrator):
         scene: mi.Scene,
         sampler: mi.Sampler,
         si: mi.SurfaceInteraction3f,
+        ray: mi.RayDifferential3f,
         medium: mi.Medium = None,
         max_depth: int = 128,
         rr_depth: int = 8,
@@ -258,52 +211,53 @@ class Path(mi.SamplingIntegrator):
         f = mi.Spectrum(1.0)
         eta = mi.Float(1.0)
         depth = mi.UInt32(1)
+        ray = mi.Ray3f(ray)
 
         bsdf_ctx = mi.BSDFContext()
         active = mi.Bool(active)
         active &= depth < max_depth
 
         while dr.hint(active, max_iterations=-1):
+            bsdf = si.bsdf(ray)
             # ---------------------- Emitter sampling ----------------------
-            L[active] += self.sample_emitter(scene, si, bsdf_ctx, f, sampler, active)
 
-            # ---------------------- BSDF sampling ----------------------
-            bsdf = si.bsdf()
+            active_em = active & mi.has_flag(bsdf.flags(), mi.BSDFFlags.Smooth)
 
-            bsdf_sample, bsdf_weight = bsdf.sample(
-                bsdf_ctx, si, sampler.next_1d(), sampler.next_2d(), active
+            ds, em_weight = scene.sample_emitter_direction(
+                si, sampler.next_2d(), True, active_em
             )
-            bsdf_weight = si.to_world_mueller(bsdf_weight, -bsdf_sample.wo, si.wi)
+            active_em &= ds.pdf != 0.0
 
-            ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
+            wo = si.to_local(ds.d)
 
-            if dr.grad_enabled(ray):
-                ray = dr.detach(ray)
+            bsdf_val, bsdf_pdf, bsdf_sample, bsdf_weight = bsdf.eval_pdf_sample(
+                bsdf_ctx, si, wo, sampler.next_1d(), sampler.next_2d(), active
+            )
 
-                wo = si.to_local(ray.d)
-                bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
-                bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / dr.detach(bsdf_pdf)
+            mis_em = dr.select(ds.delta, 1, mis_weight(ds.pdf, bsdf_pdf))
+            L[active_em] += f * bsdf_val * em_weight * mis_em
 
             # -------------- Sample next Surface Interaction --------------
 
-            f[active] *= bsdf_weight
-            eta[active] *= bsdf_sample.eta
+            f *= bsdf_weight
+            eta *= bsdf_sample.eta
 
+            ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
             si2: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
-            # Call bsdf with ray to compute uv partials
-            si2.bsdf(ray)
 
             # ---------------------- Direct emission ----------------------
-            L += self.direct_emission(
-                scene,
-                si,
-                si2,
-                bsdf_sample.pdf,
-                mi.has_flag(bsdf_sample.sampled_type, mi.BSDFFlags.Delta),
-                f,
+            bsdf_delta: mi.Bool = mi.has_flag(
+                bsdf_sample.sampled_type, mi.BSDFFlags.Delta
             )
 
-            si = dr.detach(si2)
+            ds = mi.DirectionSample3f(scene, si=si2, ref=si)
+            em_pdf = scene.pdf_emitter_direction(si, ds, ~bsdf_delta)
+
+            mis_bsdf = mis_weight(bsdf_sample.pdf, em_pdf)
+
+            L += f * ds.emitter.eval(si2, bsdf_sample.pdf > 0.0) * mis_bsdf
+
+            si = dr.detach(si2, True)
             active &= si.is_valid()
 
             # -------------------- Stopping criterion ---------------------
@@ -369,6 +323,7 @@ class Path(mi.SamplingIntegrator):
             scene,
             sampler,
             si,
+            ray,
             medium,
             max_depth=self.max_depth,
             rr_depth=self.rr_depth,
@@ -382,8 +337,10 @@ if __name__ == "__main__":
     scene = mi.cornell_box()
     scene = mi.load_dict(scene)
 
+    # scene = mi.load_file("scenes/rings/scene.xml")
+
     max_depth = 16
-    rr_depth = 128
+    rr_depth = 18
 
     mypath = mi.load_dict(
         {
@@ -402,7 +359,7 @@ if __name__ == "__main__":
     )
 
     dr.kernel_history_clear()
-    res = mi.render(scene, integrator=mypath, spp=128)
+    res = mi.render(scene, integrator=mypath, spp=1024)
     kernels = dr.kernel_history()
     optix_kernels = [
         kernel
@@ -413,7 +370,7 @@ if __name__ == "__main__":
     print("")
 
     dr.kernel_history_clear()
-    ref = mi.render(scene, integrator=path, spp=128)
+    ref = mi.render(scene, integrator=path, spp=1024)
     kernels = dr.kernel_history()
     optix_kernels = [
         kernel
