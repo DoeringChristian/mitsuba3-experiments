@@ -272,6 +272,7 @@ class Path(mi.SamplingIntegrator):
 
             si = dr.detach(si2, True)
 
+            # ----------------------- Depth Update ------------------------
             depth[active] += 1
 
             active &= depth < max_depth
@@ -330,12 +331,12 @@ class Path(mi.SamplingIntegrator):
 mi.register_integrator("mypath", lambda props: Path(props))
 
 if __name__ == "__main__":
-    # scene = mi.cornell_box()
-    # scene = mi.load_dict(scene)
+    scene = mi.cornell_box()
+    scene = mi.load_dict(scene)
 
-    scene = mi.load_file("scenes/rings/scene.xml")
+    # scene = mi.load_file("scenes/rings/scene.xml")
 
-    max_depth = 2
+    max_depth = 3
     rr_depth = 1
 
     mypath = mi.load_dict(
