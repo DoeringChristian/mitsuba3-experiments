@@ -12,7 +12,7 @@ def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
     Compute the Multiple Importance Sampling (MIS) weight given the densities
     of two sampling strategies according to the power heuristic.
     """
-    a2 = dr.sqr(pdf_a)
+    a2 = dr.square(pdf_a)
     return dr.detach(dr.select(pdf_a > 0, a2 / dr.fma(pdf_b, pdf_b, a2), 0), True)
 
 
@@ -64,7 +64,7 @@ class Path(mi.SamplingIntegrator):
 
         medium = sensor.get_medium()
 
-        spec, valid = self.sample(scene, sampler, ray, medium, active)
+        spec, valid, _ = self.sample(scene, sampler, ray, medium, active)
 
         spec_u = mi.unpolarized_spectrum(ray_weight * spec)
 
@@ -257,9 +257,8 @@ class Path(mi.SamplingIntegrator):
         # --------------------- Configure loop state ----------------------
         f = mi.Spectrum(1.0)
         eta = mi.Float(1.0)
-        depth = mi.UInt32(0)
+        depth = mi.UInt32(1)
 
-        # Variables caching information from the previous bounce
         bsdf_ctx = mi.BSDFContext()
         active = mi.Bool(active)
         active &= depth < max_depth
@@ -314,7 +313,7 @@ class Path(mi.SamplingIntegrator):
 
             fmax = dr.max(f)
 
-            rr_prob = dr.minimum(fmax * dr.sqr(eta), 0.95)
+            rr_prob = dr.minimum(fmax * dr.square(eta), 0.95)
             rr_active = depth >= rr_depth
             rr_continue = sampler.next_1d() < rr_prob
 
@@ -327,7 +326,7 @@ class Path(mi.SamplingIntegrator):
                 & (depth < max_depth)
             )
 
-        return L, (depth != 0)
+        return L, (depth != 0), []
 
     def sample(
         self: mi.SamplingIntegrator,
@@ -347,7 +346,7 @@ class Path(mi.SamplingIntegrator):
             sampler,
             si,
             medium,
-            max_depth=self.max_depth - 1,
+            max_depth=self.max_depth,
             rr_depth=self.rr_depth,
             active=active,
         )
@@ -359,24 +358,27 @@ if __name__ == "__main__":
     scene = mi.cornell_box()
     scene = mi.load_dict(scene)
 
+    max_depth = 16
+    rr_depth = 128
+
     mypath = mi.load_dict(
         {
             "type": "mypath",
-            "max_depth": 16,
-            "rr_depth": 4,
+            "max_depth": max_depth,
+            "rr_depth": rr_depth,
         }
     )
 
     path = mi.load_dict(
         {
             "type": "path",
-            "max_depth": 16,
-            "rr_depth": 4,
+            "max_depth": max_depth,
+            "rr_depth": rr_depth,
         }
     )
 
     dr.kernel_history_clear()
-    img = mi.render(scene, integrator=mypath, spp=128)
+    res = mi.render(scene, integrator=mypath, spp=128)
     kernels = dr.kernel_history()
     optix_kernels = [
         kernel
@@ -396,17 +398,20 @@ if __name__ == "__main__":
     ]
     print(f"Default Path: {optix_kernels}")
 
-    diff = dr.abs(img - ref)
+    mi.util.write_bitmap("out/res.exr", res)
+    mi.util.write_bitmap("out/ref.exr", ref)
 
-    mse = dr.mean(dr.sqr(diff), axis=None)
+    diff = dr.abs(res - ref)
+
+    mse = dr.mean(dr.square(diff), axis=None)
     print(f"{mse=}")
 
-    fig, ax = plt.subplots(1, 3, figsize=(9, 3))
+    # fig, ax = plt.subplots(1, 3, figsize=(9, 3))
 
-    ax[0].imshow(mi.util.convert_to_bitmap(img))
-    ax[0].set_title("img")
-    ax[1].imshow(mi.util.convert_to_bitmap(ref))
-    ax[1].set_title("ref")
-    ax[2].imshow(mi.util.convert_to_bitmap(diff))
-    ax[2].set_title("diff")
-    plt.show()
+    # ax[0].imshow(mi.util.convert_to_bitmap(res))
+    # ax[0].set_title("img")
+    # ax[1].imshow(mi.util.convert_to_bitmap(ref))
+    # ax[1].set_title("ref")
+    # ax[2].imshow(mi.util.convert_to_bitmap(diff))
+    # ax[2].set_title("diff")
+    # plt.show()
