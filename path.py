@@ -224,18 +224,18 @@ class Path(mi.SamplingIntegrator):
         self,
         scene: mi.Scene,
         si: mi.SurfaceInteraction3f,
-        prev_si: mi.SurfaceInteraction3f,
+        si2: mi.SurfaceInteraction3f,
         bsdf_pdf: mi.Float,
         bsdf_delta: mi.Bool,
         f: mi.Spectrum,
     ):
-        ds = mi.DirectionSample3f(scene, si, prev_si)
-        em_pdf = scene.eval_emitter_direction(prev_si, ds, ~bsdf_delta)
+        ds = mi.DirectionSample3f(scene, si2, si)
+        em_pdf = scene.eval_emitter_direction(si, ds, ~bsdf_delta)
 
         mis_bsdf = mis_weight(bsdf_pdf, em_pdf)
 
         with dr.resume_grad():
-            L = f * ds.emitter.eval(si, bsdf_delta > 0.0) * mis_bsdf
+            L = f * ds.emitter.eval(si2, bsdf_pdf > 0.0) * mis_bsdf
 
         return L
 
@@ -291,9 +291,9 @@ class Path(mi.SamplingIntegrator):
 
             prev_si = dr.detach(si)
 
-            si: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
+            si2: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
             # Call bsdf with ray to compute uv partials
-            si.bsdf(ray)
+            si2.bsdf(ray)
 
             active &= si.is_valid()
 
@@ -301,11 +301,13 @@ class Path(mi.SamplingIntegrator):
             L += self.direct_emission(
                 scene,
                 si,
-                prev_si,
+                si2,
                 bsdf_sample.pdf,
                 mi.has_flag(bsdf_sample.sampled_type, mi.BSDFFlags.Delta),
                 f,
             )
+
+            si = si2
 
             # -------------------- Stopping criterion ---------------------
 
@@ -336,6 +338,31 @@ class Path(mi.SamplingIntegrator):
         medium: mi.Medium = None,
         active: bool = True,
     ) -> tuple[mi.Color3f, mi.Bool]:
+        """
+        Contrary to the Mitsbua path tracer implementation, we start with a
+        surface interaction instead of a ray. This should reduce the loop state
+        and make it easier to comprehend the path tracing algorithm. Currently,
+        there is some discrepency between this implementation and the Mitsuba
+        one.
+
+        We start with the first surface interaction si0. At every iteration of
+        the loop, we try to estimate the outgoing radiance of the given surface
+        interaction. The estimate of the next si and the emitter sample are
+        combined with MIS.
+
+        ```python
+        # get first si
+        L += Le(si)
+
+        loop:
+            # sample emitter sample `e`
+            L += β * mis * f(si -> e) * Le(e)
+            # sample next ``si``
+            L += β * mis * f(si -> si2) * Le(si2)
+
+            β *= f(si -> si2)
+        ```
+        """
         # Get primary intersection
         si: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
         # Call bsdf with ray to compute uv partials
