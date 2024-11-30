@@ -245,24 +245,7 @@ class Path(mi.SamplingIntegrator):
             ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
             si2: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
 
-            # ---------------------- Direct emission ----------------------
-            bsdf_delta: mi.Bool = mi.has_flag(
-                bsdf_sample.sampled_type, mi.BSDFFlags.Delta
-            )
-
-            ds = mi.DirectionSample3f(scene, si=si2, ref=si)
-            em_pdf = scene.pdf_emitter_direction(si, ds, ~bsdf_delta)
-
-            mis_bsdf = mis_weight(bsdf_sample.pdf, em_pdf)
-
-            L += f * ds.emitter.eval(si2, bsdf_sample.pdf > 0.0) * mis_bsdf
-
-            si = dr.detach(si2, True)
-            active &= si.is_valid()
-
             # -------------------- Stopping criterion ---------------------
-
-            depth[active] += 1
 
             fmax = dr.max(f)
 
@@ -278,6 +261,25 @@ class Path(mi.SamplingIntegrator):
                 & (fmax != 0.0)
                 & (depth < max_depth)
             )
+
+            # ---------------------- Direct emission ----------------------
+            bsdf_delta: mi.Bool = mi.has_flag(
+                bsdf_sample.sampled_type, mi.BSDFFlags.Delta
+            )
+
+            ds = mi.DirectionSample3f(scene, si=si2, ref=si)
+            em_pdf = scene.pdf_emitter_direction(si, ds, ~bsdf_delta)
+
+            mis_bsdf = mis_weight(bsdf_sample.pdf, em_pdf)
+
+            L[active] += f * ds.emitter.eval(si2, bsdf_sample.pdf > 0.0) * mis_bsdf
+
+            si = dr.detach(si2, True)
+
+            depth[active] += 1
+
+            active &= depth < max_depth
+            active &= si.is_valid()
 
         return L, (depth != 0), []
 
@@ -334,13 +336,13 @@ class Path(mi.SamplingIntegrator):
 mi.register_integrator("mypath", lambda props: Path(props))
 
 if __name__ == "__main__":
-    scene = mi.cornell_box()
-    scene = mi.load_dict(scene)
+    # scene = mi.cornell_box()
+    # scene = mi.load_dict(scene)
 
-    # scene = mi.load_file("scenes/rings/scene.xml")
+    scene = mi.load_file("scenes/rings/scene.xml")
 
-    max_depth = 16
-    rr_depth = 18
+    max_depth = 2
+    rr_depth = 1
 
     mypath = mi.load_dict(
         {
