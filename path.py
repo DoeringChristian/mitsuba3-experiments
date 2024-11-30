@@ -284,18 +284,14 @@ class Path(mi.SamplingIntegrator):
                 bsdf_val, bsdf_pdf = bsdf.eval_pdf(bsdf_ctx, si, wo, active)
                 bsdf_weight[bsdf_pdf > 0.0] = bsdf_val / dr.detach(bsdf_pdf)
 
-            # ------ Update loop variables based on current interaction ------
+            # -------------- Sample next Surface Interaction --------------
 
             f[active] *= bsdf_weight
             eta[active] *= bsdf_sample.eta
 
-            prev_si = dr.detach(si)
-
             si2: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
             # Call bsdf with ray to compute uv partials
             si2.bsdf(ray)
-
-            active &= si.is_valid()
 
             # ---------------------- Direct emission ----------------------
             L += self.direct_emission(
@@ -307,7 +303,8 @@ class Path(mi.SamplingIntegrator):
                 f,
             )
 
-            si = si2
+            si = dr.detach(si2)
+            active &= si.is_valid()
 
             # -------------------- Stopping criterion ---------------------
 
