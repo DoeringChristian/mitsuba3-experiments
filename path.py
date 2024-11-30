@@ -225,17 +225,17 @@ class Path(mi.SamplingIntegrator):
         scene: mi.Scene,
         si: mi.SurfaceInteraction3f,
         prev_si: mi.SurfaceInteraction3f,
-        prev_bsdf_pdf: mi.Float,
-        prev_bsdf_delta: mi.Bool,
+        bsdf_pdf: mi.Float,
+        bsdf_delta: mi.Bool,
         f: mi.Spectrum,
     ):
         ds = mi.DirectionSample3f(scene, si, prev_si)
-        em_pdf = scene.eval_emitter_direction(prev_si, ds, ~prev_bsdf_delta)
+        em_pdf = scene.eval_emitter_direction(prev_si, ds, ~bsdf_delta)
 
-        mis_bsdf = mis_weight(prev_bsdf_pdf, em_pdf)
+        mis_bsdf = mis_weight(bsdf_pdf, em_pdf)
 
         with dr.resume_grad():
-            L = f * ds.emitter.eval(si, prev_bsdf_pdf > 0.0) * mis_bsdf
+            L = f * ds.emitter.eval(si, bsdf_delta > 0.0) * mis_bsdf
 
         return L
 
