@@ -242,10 +242,13 @@ class Path(mi.SamplingIntegrator):
             f *= bsdf_weight
             eta *= bsdf_sample.eta
 
-            ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
-            si2: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
-
             # -------------------- Stopping criterion ---------------------
+
+            # NOTE:Mitsuba3 performs russian roulette before the direct
+            # emission of the next surface interaction. I'm wondering why this
+            # is correct? Should we not always add the direct emission to the
+            # estimate of the scattered radiance of the first interaction?
+            # It might also just be convention?
 
             fmax = dr.max(f)
 
@@ -255,14 +258,13 @@ class Path(mi.SamplingIntegrator):
 
             f[rr_active] *= dr.rcp(dr.detach(rr_prob))
 
-            active = (
-                active
-                & (~rr_active | rr_continue)
-                & (fmax != 0.0)
-                & (depth < max_depth)
-            )
+            active &= fmax != 0.0
+            active &= ~rr_active | rr_continue
 
             # ---------------------- Direct emission ----------------------
+            ray = si.spawn_ray(si.to_world(bsdf_sample.wo))
+            si2: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
+
             bsdf_delta: mi.Bool = mi.has_flag(
                 bsdf_sample.sampled_type, mi.BSDFFlags.Delta
             )
@@ -294,9 +296,7 @@ class Path(mi.SamplingIntegrator):
         """
         Contrary to the Mitsbua path tracer implementation, we start with a
         surface interaction instead of a ray. This should reduce the loop state
-        and make it easier to comprehend the path tracing algorithm. Currently,
-        there is some discrepency between this implementation and the Mitsuba
-        one.
+        and make it easier to comprehend the path tracing algorithm.
 
         We start with the first surface interaction si0. At every iteration of
         the loop, we try to estimate the outgoing radiance of the given surface
