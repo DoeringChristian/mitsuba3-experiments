@@ -192,22 +192,39 @@ class Path(mi.SamplingIntegrator):
     #         return result
 
     @dr.syntax
-    def sample_Lo(
-        self,
+    def sample(
+        self: mi.SamplingIntegrator,
         scene: mi.Scene,
         sampler: mi.Sampler,
-        si: mi.SurfaceInteraction3f,
         ray: mi.RayDifferential3f,
         medium: mi.Medium = None,
-        max_depth: int = 128,
-        rr_depth: int = 8,
         active: bool = True,
     ) -> tuple[mi.Color3f, mi.Bool]:
-        # ----------------------- Primary emission ------------------------
+        """
+        Contrary to the Mitsbua path tracer implementation, we start with a
+        surface interaction instead of a ray. This should reduce the loop state
+        and make it easier to comprehend the path tracing algorithm.
 
-        L = si.emitter(scene, active).eval(si, active)
+        We start with the first surface interaction si0. At every iteration of
+        the loop, we try to estimate the outgoing radiance of the given surface
+        interaction. The estimate of the next si and the emitter sample are
+        combined with MIS.
 
+        ```python
+        # get first si
+        L += Le(si)
+
+        loop:
+            # sample emitter sample `e`
+            L += β * mis * f(si -> e) * Le(e)
+            # sample next ``si``
+            L += β * mis * f(si -> si2) * Le(si2)
+
+            β *= f(si -> si2)
+        ```
+        """
         # --------------------- Configure loop state ----------------------
+        L = mi.Spectrum(0.0)
         f = mi.Spectrum(1.0)
         eta = mi.Float(1.0)
         depth = mi.UInt32(1)
@@ -217,7 +234,11 @@ class Path(mi.SamplingIntegrator):
         active = mi.Bool(active)
         active &= depth < max_depth
 
-        while dr.hint(active, max_iterations=-1):
+        # ----------------------- Primary emission ------------------------
+        si: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
+        L += si.emitter(scene, active).eval(si, active)
+
+        while active:
             bsdf = si.bsdf(ray)
             # ---------------------- Emitter sampling ----------------------
 
@@ -279,53 +300,6 @@ class Path(mi.SamplingIntegrator):
             active &= si.is_valid()
 
         return L, (depth != 0), []
-
-    def sample(
-        self: mi.SamplingIntegrator,
-        scene: mi.Scene,
-        sampler: mi.Sampler,
-        ray: mi.RayDifferential3f,
-        medium: mi.Medium = None,
-        active: bool = True,
-    ) -> tuple[mi.Color3f, mi.Bool]:
-        """
-        Contrary to the Mitsbua path tracer implementation, we start with a
-        surface interaction instead of a ray. This should reduce the loop state
-        and make it easier to comprehend the path tracing algorithm.
-
-        We start with the first surface interaction si0. At every iteration of
-        the loop, we try to estimate the outgoing radiance of the given surface
-        interaction. The estimate of the next si and the emitter sample are
-        combined with MIS.
-
-        ```python
-        # get first si
-        L += Le(si)
-
-        loop:
-            # sample emitter sample `e`
-            L += β * mis * f(si -> e) * Le(e)
-            # sample next ``si``
-            L += β * mis * f(si -> si2) * Le(si2)
-
-            β *= f(si -> si2)
-        ```
-        """
-        # Get primary intersection
-        si: mi.SurfaceInteraction3f = scene.ray_intersect(ray, active)
-        # Call bsdf with ray to compute uv partials
-        si.bsdf(ray)
-
-        return self.sample_Lo(
-            scene,
-            sampler,
-            si,
-            ray,
-            medium,
-            max_depth=self.max_depth,
-            rr_depth=self.rr_depth,
-            active=active,
-        )
 
 
 mi.register_integrator("mypath", lambda props: Path(props))
