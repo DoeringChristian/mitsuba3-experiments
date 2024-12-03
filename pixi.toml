@@ -24,9 +24,9 @@ python = "3.12.*"
 gcc = { version = "13.2.*", channel = "conda-forge" }
 gxx = { version = "13.2.*", channel = "conda-forge" }
 pytorch-cuda = { version = "12.4.*", channel = "pytorch" }
-pytorch = { version = ">=2.4.1,<3", channel = "pytorch" }
-torchvision = { version = ">=0.19.1,<0.20", channel = "pytorch" }
-torchaudio = { version = ">=2.4.1,<3", channel = "pytorch" }
+pytorch = { version = "2.5.0", channel = "pytorch" }
+torchvision = { version = "0.20.0", channel = "pytorch" }
+torchaudio = { version = "2.5.0", channel = "pytorch" }
 zlib = "1.3.1"
 libcxx = ">=19.1.1,<20"
 libcxx-devel = ">=19.1.1,<20"
@@ -34,13 +34,14 @@ libcxxabi = ">=19.1.1,<20"
 
 pip = ">=24.2,<25"
 
-cuda = "*"
-
 ipython = ">=8.28.0,<9"
 matplotlib = ">=3.9.2,<4"
 numpy = ">=2.1.2,<3"
 omegaconf = ">=2.3.0,<3"
 pytest = ">=8.3.3,<9"
+
+[system-requirements]
+cuda = "12.4.0"
 
 [pypi-options]
 no-build-isolation = ["tinycudann"]
