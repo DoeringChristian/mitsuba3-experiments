@@ -7,16 +7,16 @@ platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
-test-mitsuba = { cmd = "echo $PYTHONPATH && python -m pytest", cwd = "mitsuba3/build/build-mitsuba", env = { PYTHONPATH = "python:$PYTHONPATH" }, depends-on = [
+test-mitsuba = { cmd = "echo $PYTHONPATH && python -m pytest", cwd = "build-mitsuba", env = { PYTHONPATH = "python:$PYTHONPATH" }, depends-on = [
     "build-mitsuba",
 ] }
-debug-mitsuba = { cmd = "echo $PYTHONPATH && gdb --args python -m pytest", cwd = "mitsuba3/build", env = { PYTHONPATH = "python:$PYTHONPATH" }, depends-on = [
+debug-mitsuba = { cmd = "echo $PYTHONPATH && gdb --args python -m pytest", cwd = "build-mitsuba", env = { PYTHONPATH = "python:$PYTHONPATH" }, depends-on = [
     "build-mitsuba",
 ] }
-build-mitsuba = { cwd = "mitsuba3/build/", cmd = "ninja", depends-on = [
+build-mitsuba = { cwd = "build-mitsuba", cmd = "ninja", depends-on = [
     "configure-mitsuba",
 ] }
-configure-mitsuba = { cmd = "cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=on -DCMAKE_BUILD_TYPE=RelWithDebInfo -G Ninja -S ./mitsuba3/ -B mitsuba3/build" }
+configure-mitsuba = { cmd = "cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=on -DCMAKE_BUILD_TYPE=RelWithDebInfo -G Ninja -S mitsuba3 -B build-mitsuba" }
 clean-mitsuba = { cmd = "rm -r build", cwd = "mitsuba3" }
 
 [dependencies]
