@@ -53,7 +53,7 @@ mitsuba = ">=3.6.0, <4"
 tinycudann = { git = "https://github.com/NVlabs/tiny-cuda-nn.git", subdirectory = "bindings/torch", rev = "c91138bcd4c6877c8d5e60e483c0581aafc70cce" }
 
 [activation]
-scripts = ["mitsuba3/build/setpath.sh"]
+scripts = ["build-mitsuba/setpath.sh"]
 # PYTHONPATH = "mitsuba3/build/python:$PYTHONPATH"
 
 [target.linux-64.activation.env]
