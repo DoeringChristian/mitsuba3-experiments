@@ -40,7 +40,7 @@ compiler-rt = "18.*"  # provides asan
 lld = "18.*"
 mold = ">=2.35.1,<3"
 
-python = "3.11.*"
+python = "3.12.*"
 pytest = ">=8.3.3,<9"
 numpy = ">=2.1.2,<3"
 tqdm = ">=4.67.1,<5"
