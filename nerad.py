@@ -4,6 +4,11 @@
 
 # %% [markdown]
 # ## Imports
+# Note, we require the `coopvec-hashgrid` branch of Dr.Jit, to support
+# hashgrid encodings. We also recommend to use the `scatter-reduce-f16x2`
+# branch for drjit-core. It will significantly improve performance of the
+# hashgrids.
+
 # %%
 
 import mitsuba as mi
@@ -18,6 +23,13 @@ from drjit.auto.ad import TensorXf16, Float16, Float32, Bool, UInt32
 from drjit.opt import Adam, GradScaler
 from mitsuba.ad.integrators.common import mis_weight
 
+
+# %% [markdown]
+# We define a seed generator function, which allows us to globally generate new
+# seeds without having to worry, about accidentally generating the same seed
+# twice.
+
+# %%
 __seed = 0
 
 
@@ -28,6 +40,14 @@ def seed():
     return tmp
 
 
+# %% [markdown]
+# ## Radiance Field
+# Let's define our radiance field model. It consists of a hash grid encoding,
+# to encode the position of our samples, and a sequential model. With the new
+# coopvec feature, we can declare our network with Dr.Jit, instead of having to
+# go trough PyTorch. The network and encoding can now also be evaluated in the
+# same kernel, that generates the surface interactions.
+
 # %%
 
 
@@ -37,21 +57,28 @@ class Field:
         scene: mi.Scene,
         width: int = 64,
         n_hidden: int = 4,
+        sh_order: int = 3,
+        bias: bool = False,
     ) -> None:
         self.scene = scene
+        self.sh_order = sh_order
 
-        self.pos_enc = nn.HashGridEncoding(Float16, dimension=3)
+        self.pos_enc = nn.PermutoEncoding(Float16, dimension=3)
 
         sequential = []
         sequential.append(nn.Cast(Float16))
-        sequential.append(nn.Linear(self.pos_enc.out_features + 6, width))
+        sequential.append(
+            nn.Linear(
+                self.pos_enc.out_features + (sh_order + 1) ** 2 + 6, width, bias=bias
+            )
+        )
         sequential.append(nn.LeakyReLU())
 
         for i in range(n_hidden):
-            sequential.append(nn.Linear(width, width))
+            sequential.append(nn.Linear(width, width, bias=bias))
             sequential.append(nn.LeakyReLU())
 
-        sequential.append(nn.Linear(width, 3))
+        sequential.append(nn.Linear(width, 3, bias=bias))
 
         sequential = nn.Sequential(*sequential)
 
@@ -66,57 +93,21 @@ class Field:
 
         p_norm = normalize_pos(si.p)
 
-        pos_features = self.pos_enc(p_norm)
-        features = nn.CoopVec(p_norm, si.wi, pos_features)
+        p_enc = self.pos_enc(p_norm)
+
+        wi_enc = dr.sh_eval(si.wi, self.sh_order)
+
+        features = nn.CoopVec(p_norm, p_enc, si.wi, wi_enc)
         result = mi.Color3f(*self.sequential(features))
 
         return result
 
 
-# %%
-
-
-@dr.syntax
-def next_smooth_si(
-    scene: mi.Scene,
-    si: mi.SurfaceInteraction3f,
-    ray: mi.Ray3f,
-    sampler: mi.Sampler,
-):
-    """
-    This function tries to find the next smooth surface interaction, by tracing
-    a path in the scene.
-    """
-
-    f = mi.Spectrum(1)
-
-    bsdf_ctx = mi.BSDFContext()
-
-    bsdf = si.bsdf(ray)
-    bs, bsdf_weight = bsdf.sample(bsdf_ctx, si, sampler.next_1d(), sampler.next_2d())
-
-    active = mi.Bool(mi.has_flag(bs.sampled_type, mi.BSDFFlags.Delta))
-    depth = mi.UInt32(0)
-    max_depth = 10
-
-    while active:
-
-        f *= bsdf_weight
-
-        ray = si.spawn_ray(si.to_world(bs.wo))
-        si = scene.ray_intersect(ray)
-
-        bsdf = si.bsdf(ray)
-        bs, bsdf_weight = bsdf.sample(
-            bsdf_ctx, si, sampler.next_1d(), sampler.next_2d()
-        )
-
-        depth += 1
-        active &= mi.Bool(mi.has_flag(bs.sampled_type, mi.BSDFFlags.Delta))
-        active &= depth < max_depth
-
-    return si, f
-
+# %% [markdown]
+# ## Integrator
+# Most of the neural radiosity algorithm is implemented in this integrator. The
+# functions `sample_rhs` and `sample_lhs` are used to sample the right and left
+# hand side contributions of the equation.
 
 # %%
 
@@ -126,12 +117,62 @@ class Integrator(mi.SamplingIntegrator):
         super().__init__(mi.Properties())
         self.field = field
 
-    def sample_lhs(self, scene: mi.Scene, si: mi.SurfaceInteraction3f) -> mi.Color3f:
+    @dr.syntax
+    def next_smooth_si(
+        self,
+        scene: mi.Scene,
+        si: mi.SurfaceInteraction3f,
+        sampler: mi.Sampler,
+    ):
+        """
+        This function tries to find the next smooth surface interaction, by tracing
+        a path in the scene.
+        """
+
+        f = mi.Spectrum(1)
+
+        bsdf_ctx = mi.BSDFContext()
+
+        bsdf = si.bsdf()
+        bs, bsdf_weight = bsdf.sample(
+            bsdf_ctx, si, sampler.next_1d(), sampler.next_2d()
+        )
+
+        active = mi.Bool(mi.has_flag(bs.sampled_type, mi.BSDFFlags.Delta))
+        depth = mi.UInt32(0)
+        max_depth = 10
+
+        while active:
+
+            f *= bsdf_weight
+
+            ray = si.spawn_ray(si.to_world(bs.wo))
+            si = scene.ray_intersect(ray)
+
+            bsdf = si.bsdf(ray)
+            bs, bsdf_weight = bsdf.sample(
+                bsdf_ctx, si, sampler.next_1d(), sampler.next_2d()
+            )
+
+            depth += 1
+            active &= mi.Bool(mi.has_flag(bs.sampled_type, mi.BSDFFlags.Delta))
+            active &= depth < max_depth
+
+        return si, f
+
+    def sample_lhs(
+        self,
+        scene: mi.Scene,
+        si: mi.SurfaceInteraction3f,
+    ) -> mi.Color3f:
         L = self.field(si)
         return L
 
     def sample_rhs(
-        self, scene: mi.Scene, si: mi.SurfaceInteraction3f, active: bool | Bool = True
+        self,
+        scene: mi.Scene,
+        si: mi.SurfaceInteraction3f,
+        active: bool | Bool = True,
     ) -> mi.Color3f:
         active = Bool(active)
 
@@ -172,7 +213,7 @@ class Integrator(mi.SamplingIntegrator):
         )
         f = mis_weight(bs.pdf, emitter_pdf) * bsdf_weight
 
-        si2, f2 = next_smooth_si(scene, si2, ray, sampler)
+        si2, f2 = self.next_smooth_si(scene, si2, sampler)
         active &= si2.is_valid()
         f *= f2
         f *= dr.select(active, 1.0, 0)
@@ -201,7 +242,7 @@ class Integrator(mi.SamplingIntegrator):
         active = mi.Bool(active)
 
         si = scene.ray_intersect(ray, active)
-        si, f = next_smooth_si(scene, si, ray, sampler)
+        si, f = self.next_smooth_si(scene, si, sampler)
 
         f *= dr.select(si.is_valid(), 1.0, 0.0)
         L = self.sample_lhs(scene, si) * f
@@ -211,9 +252,19 @@ class Integrator(mi.SamplingIntegrator):
 
 
 # %%
-batch_size = 2**10
+batch_size = 2**14
 M = 32
 
+# %% [markdown]
+# ## Surface Sampling
+# To train the neural field, we have to sample points and directions on the
+# surface of the scene. This class represents a sampler, which enables us to do
+# so. In its constructor it constructs a distribution over shapes, proportional
+# to their surface areas. When sampling a point on the surface, we use this to
+# select a shape and then sample a point on the surface of that shape, for
+# which Mitsuba has a function already implemented. The direction is sampled
+# either on the sphere or hemisphere depending on if the bsdf of the shape is
+# two sided.
 
 # %%
 
@@ -258,10 +309,22 @@ class IntersectionSampler:
 
 # %%
 
-scene = mi.load_dict(mi.cornell_box())
+scene_dict = mi.cornell_box()
+scene_dict.pop("small-box")
+scene_dict.pop("large-box")
+scene_dict["glass"] = {"type": "dielectric"}
+scene_dict["ball"] = {
+    "type": "sphere",
+    "to_world": mi.ScalarTransform4f.scale([0.4, 0.4, 0.4]).translate([0.5, 0, 0.5]),
+    "bsdf": {"type": "ref", "id": "glass"},
+}
+
+scene = mi.load_dict(scene_dict)
+# scene = mi.load_dict(mi.cornell_box())
 
 integrator = mi.load_dict({"type": "path"})
 img_ref = integrator.render(scene, scene.sensors()[0], seed(), 1_000)
+mi.util.write_bitmap("out/nerad/ref.exr", img_ref)
 
 
 field = Field(scene)
@@ -286,11 +349,15 @@ isampler = IntersectionSampler(scene)
 integrator = Integrator(field)
 os.makedirs("out/nerad", exist_ok=True)
 
+# %% [markdown]
+# ## Training Step
+# We implement the training step in a separate function. This allows us to use
+# frozen functions.
+
+# %%
+
 
 def training_step(scene, field, isampler, integrator, scaler):
-    field.weights[:] = Float16(opt["sequential"])
-    field.pos_enc.data[:] = Float16(opt["pos_enc"])
-
     # Sample left-hand-side interaction
     si_lhs = isampler.sample(sampler_lhs)
 
@@ -305,11 +372,19 @@ def training_step(scene, field, isampler, integrator, scaler):
     return loss
 
 
+# %% [markdown]
+# Now we can use the training_step function to train a neural radiance field.
+
+# %%
+
 n = 1_000
 val_interval = 100
 iterator = tqdm.tqdm(range(n))
 for it in iterator:
     sampler_lhs.seed(seed(), batch_size)
+
+    field.weights[:] = Float16(opt["sequential"])
+    field.pos_enc.data[:] = Float16(opt["pos_enc"])
 
     with dr.profile_range("training step"):
         loss = training_step(scene, field, isampler, integrator, scaler)
@@ -318,7 +393,7 @@ for it in iterator:
         with dr.profile_range("validation step"):
             loss = loss.numpy().item()
 
-            img = integrator.render(scene, scene.sensors()[0], 0, 1)
+            img = integrator.render(scene, scene.sensors()[0], 0, 16)
             mse = dr.mean(dr.square(img - img_ref), axis=None).numpy().item()
             mi.util.write_bitmap(f"out/nerad/{it}.exr", img)
 

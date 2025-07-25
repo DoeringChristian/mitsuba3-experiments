@@ -3,7 +3,6 @@ scenes/
 .venv
 out/
 __pycache__
-data/
 flip/
 .pixi/
 build*/
