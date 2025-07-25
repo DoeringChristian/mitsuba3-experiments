@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import os
 
 mi.set_variant("cuda_ad_rgb")
-from drjit.auto.ad import TensorXf16, Float16, Float32
+from drjit.auto.ad import TensorXf16, Float16, Float32, Bool, UInt32
 from drjit.opt import Adam, GradScaler
 from mitsuba.ad.integrators.common import mis_weight
 
@@ -130,9 +130,16 @@ class Integrator(mi.SamplingIntegrator):
         L = self.field(si)
         return L
 
-    def sample_rhs(self, scene: mi.Scene, si: mi.SurfaceInteraction3f) -> mi.Color3f:
+    def sample_rhs(
+        self, scene: mi.Scene, si: mi.SurfaceInteraction3f, active: bool | Bool = True
+    ) -> mi.Color3f:
+        active = Bool(active)
+
         index = dr.repeat(dr.arange(mi.UInt32, batch_size), M)
-        si = dr.gather(mi.SurfaceInteraction3f, si, index)
+        si = dr.gather(type(si), si, index)
+        active = dr.gather(type(active), active, index)
+
+        active &= si.is_valid()
 
         sampler: mi.Sampler = mi.load_dict({"type": "independent"})
         sampler.seed(seed(), batch_size * M)
@@ -157,6 +164,8 @@ class Integrator(mi.SamplingIntegrator):
         ray = si.spawn_ray(si.to_world(bs.wo))
         si2 = scene.ray_intersect(ray)
 
+        active &= si2.is_valid()
+
         ds = mi.DirectionSample3f(scene, si=si2, ref=si)
         emitter_pdf = scene.pdf_emitter_direction(
             si, mi.DirectionSample3f(scene, si=si2, ref=si)
@@ -164,11 +173,16 @@ class Integrator(mi.SamplingIntegrator):
         f = mis_weight(bs.pdf, emitter_pdf) * bsdf_weight
 
         si2, f2 = next_smooth_si(scene, si2, ray, sampler)
+        active &= si2.is_valid()
         f *= f2
-        f *= dr.select(si2.is_valid(), 1.0, 0)
+        f *= dr.select(active, 1.0, 0)
+
+        # Reorder threads to improve performance
+        si2 = dr.reorder_threads(UInt32(active), 1, si2)
+        L_field = self.field(si2)
 
         emitter_value = si2.emitter(scene).eval(si2)
-        L += f * (emitter_value + self.field(si2))
+        L += f * (emitter_value + L_field)
 
         L = dr.block_sum(L, M, mode="symbolic") / M
 
@@ -272,12 +286,8 @@ isampler = IntersectionSampler(scene)
 integrator = Integrator(field)
 os.makedirs("out/nerad", exist_ok=True)
 
-n = 1_000
-val_interval = 100
-iterator = tqdm.tqdm(range(n))
-for it in iterator:
-    sampler_lhs.seed(seed(), batch_size)
 
+def training_step(scene, field, isampler, integrator, scaler):
     field.weights[:] = Float16(opt["sequential"])
     field.pos_enc.data[:] = Float16(opt["pos_enc"])
 
@@ -292,11 +302,24 @@ for it in iterator:
     dr.backward(scaler.scale(loss))
     scaler.step(opt)
 
+    return loss
+
+
+n = 1_000
+val_interval = 100
+iterator = tqdm.tqdm(range(n))
+for it in iterator:
+    sampler_lhs.seed(seed(), batch_size)
+
+    with dr.profile_range("training step"):
+        loss = training_step(scene, field, isampler, integrator, scaler)
+
     if (it + 1) % val_interval == 0:
-        loss = loss.numpy().item()
+        with dr.profile_range("validation step"):
+            loss = loss.numpy().item()
 
-        img = integrator.render(scene, scene.sensors()[0], 0, 1)
-        mse = dr.mean(dr.square(img - img_ref), axis=None).numpy().item()
-        mi.util.write_bitmap(f"out/nerad/{it}.exr", img)
+            img = integrator.render(scene, scene.sensors()[0], 0, 1)
+            mse = dr.mean(dr.square(img - img_ref), axis=None).numpy().item()
+            mi.util.write_bitmap(f"out/nerad/{it}.exr", img)
 
-        iterator.set_postfix({"loss": loss, "mse": mse})
+            iterator.set_postfix({"loss": loss, "mse": mse})
