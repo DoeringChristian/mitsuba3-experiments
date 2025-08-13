@@ -47,7 +47,28 @@ tex = Texture2f(dr.mean(ref, axis=-1)[:, :, None])
 # %%
 
 
-class PermutationLayer(nn.Module):
+def uniform_to_std_normal(x: dr.ArrayBase):
+    y = dr.zeros_like(x)
+    r = dr.sqrt(-2.0 * dr.log(1.0 - x))
+    phi = 2.0 * dr.pi * y
+
+    c = dr.cos(phi)
+    return c * r
+
+
+def uniform_to_std_normal_pdf(z: dr.ArrayBase):
+    return dr.inv_two_pi * dr.exp(-0.5 * dr.square(z))
+
+
+class FlowLayer(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def inverse(self, z: nn.CoopVec) -> nn.CoopVec: ...
+    def forward(self, x: nn.CoopVec) -> tuple[nn.CoopVec, Float16]: ...
+
+
+class PermutationLayer(FlowLayer):
     def __init__(self) -> None:
         super().__init__()
 
@@ -65,7 +86,7 @@ class PermutationLayer(nn.Module):
         return z, ldj
 
 
-class CouplingLayer(nn.Module):
+class CouplingLayer(FlowLayer):
 
     def __init__(self, n_layers: int = 3, n_activations: int = 64) -> None:
         super().__init__()
@@ -119,8 +140,21 @@ class CouplingLayer(nn.Module):
 
 
 class Flow(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, n_layers: int = 3) -> None:
         super().__init__()
+
+        layers: list[FlowLayer] = []
+        for i in range(n_layers):
+            layers.append(CouplingLayer())
+            layers.append(PermutationLayer())
+
+        self.layers = layers
+
+    def sample_base_dist(self, sample: nn.CoopVec) -> nn.CoopVec:
+        return nn.CoopVec(*[uniform_to_std_normal(x) for x in sample])
+
+    def eval_base_dist(self, z: nn.CoopVec) -> dr.ArrayBase:
+        return dr.prod([uniform_to_std_normal_pdf(z) for z in z])
 
     def log_p(self, x: nn.CoopVec) -> Float16:
         """
@@ -128,8 +162,25 @@ class Flow(nn.Module):
         `x`.
         """
 
-    def sample(self, z: nn.CoopVec) -> nn.CoopVec:
+        log_p = dr.zeros(x.dtype)
+
+        for layer in self.layers:
+            x, ldj = layer.forward(x)
+            log_p += ldj
+
+        z = x
+
+        log_p += dr.log(self.eval_base_dist(z))
+        return log_p
+
+    def sample(self, sample: nn.CoopVec) -> nn.CoopVec:
         r"""
-        Sample a function from the learned target distribution $p_{X;\theta}$,
-        given a sample from the "prior" distributuion $Z \sim p_Z(Z)$.
+        Sample a function from the learned target distribution $X \sim
+        p_{X;\theta}$, given a sample from the uniform distribution.
         """
+        z = self.sample_base_dist(sample)
+
+        for layer in reversed(self.layers):
+            z = layer.inverse(z)
+
+        return z
