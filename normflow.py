@@ -29,7 +29,7 @@ rng = dr.rng(seed=0)
 
 ref = TensorXf(iio.imread("data/spiral.jpg") / 256)
 ref = dr.mean(ref, axis=-1)[:, :, None]
-ref = ref / dr.mean(ref, axis=None)
+ref = ref / dr.sum(ref, axis=None)
 tex = Texture2f(ref)
 
 # %%
@@ -37,7 +37,7 @@ tex = Texture2f(ref)
 ref_np = ref.numpy()[:, :, 0]
 dist_ref = mi.DiscreteDistribution2D(ref_np)
 
-x, _, _ = dist_ref.sample(rng.random(mi.Point2f, (2, 1_000_000)))
+x, _, _ = dist_ref.sample(rng.random(mi.Point2f, (2, 100_000)))
 x = mi.Point2f(x) / mi.Vector2f(ref_np.shape[0], ref_np.shape[1])
 
 fig, ax = plt.subplots(1, 2)
@@ -285,6 +285,19 @@ flow: Flow = flow.alloc(TensorXf16, rng=rng)
 
 weights, flow = nn.pack(flow, "training")
 
+
+x_kl = rng.random(mi.Point2f, (2, 100_000))
+
+
+def kl_divergence(flow):
+    p = tex.eval(x_kl)[0]
+    q = dr.exp(Float32(flow.log_p(nn.CoopVec(ArrayXf16(x_kl)))))
+
+    d_kl = p * dr.log(p / q + 1e-5)
+    d_kl[p == 0] = 0
+    return dr.mean(d_kl, axis=None).numpy().item()
+
+
 # %%
 
 opt = Adam(lr=0.001, params={"weights": Float32(weights)})
@@ -292,8 +305,9 @@ opt = Adam(lr=0.001, params={"weights": Float32(weights)})
 scaler = GradScaler()
 
 batch_size = 2**14
-n = 200
+n = 1_000
 losses = []
+d_kls = []
 
 iterator = tqdm.tqdm(range(n))
 for it in iterator:
@@ -311,23 +325,32 @@ for it in iterator:
     dr.backward(scaler.scale(loss_kl))
     scaler.step(opt)
 
-    if (it + 1) % 1 == 0:
+    if (it + 1) % 10 == 0:
         loss = loss_kl.numpy().item()
-        iterator.set_postfix({"loss_kl": loss})
         losses.append(loss)
+        d_kl = kl_divergence(flow)
+        d_kls.append(d_kl)
+        iterator.set_postfix({"loss_kl": loss, "d_kl": d_kl})
 
 # %%
+
 plt.plot(losses)
 plt.ylabel("KL loss")
 plt.xlabel("it")
+
+# %%
+plt.plot(d_kls)
+plt.ylabel("KL divergence")
+plt.xlabel("it")
+
 # %%
 
-x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 1_000_000)))))
+x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 100_000)))))
 hist, _, _ = np.histogram2d(
     x[1], x[0], bins=ref_np.shape[0], density=True, range=[[0, 1], [0, 1]]
 )
 
-x = rng.random(ArrayXf16, (2, 1_000_000))
+x = rng.random(ArrayXf16, (2, 100_000))
 log_p = flow.log_p(nn.CoopVec(x))
 p = dr.exp(log_p)
 hist2, _, _ = np.histogram2d(
@@ -343,5 +366,5 @@ fig, ax = plt.subplots(1, 2)
 
 ax[0].set_title("sampled")
 ax[0].imshow(hist)
-ax[0].set_title("evaluated")
+ax[1].set_title("evaluated")
 ax[1].imshow(hist2)
