@@ -27,12 +27,7 @@ rng = dr.rng(seed=0)
 
 # %%
 
-ref = TensorXf(
-    iio.imread(
-        "https://rgl.s3.eu-central-1.amazonaws.com/media/uploads/wjakob/2024/06/wave-128.png"
-    )
-    / 256
-)
+ref = TensorXf(iio.imread("data/spiral.jpg") / 256)
 ref = dr.mean(ref, axis=-1)[:, :, None]
 ref = ref / dr.mean(ref, axis=None)
 tex = Texture2f(ref)
@@ -46,10 +41,19 @@ x, _, _ = dist_ref.sample(rng.random(mi.Point2f, (2, 1_000_000)))
 x = mi.Point2f(x) / mi.Vector2f(ref_np.shape[0], ref_np.shape[1])
 
 fig, ax = plt.subplots(1, 2)
-hist, _, _ = np.histogram2d(x.y, x.x, bins=ref_np.shape[0], density=True)
+hist, _, _ = np.histogram2d(
+    x.y,
+    x.x,
+    bins=ref_np.shape[0],
+    density=True,
+    range=[
+        [0, 1],
+        [0, 1],
+    ],
+)
 ax[0].set_title("sampled")
 ax[0].imshow(hist)
-ax[0].set_title("evaluated")
+ax[1].set_title("evaluated")
 ax[1].imshow(ref_np)
 
 
@@ -71,6 +75,26 @@ ax[1].imshow(ref_np)
 # p_{X;\theta}(X_i)$. To compute this probability, we can sum over the log
 # determinant of the layers, $p_{X;\theta}(X) = \text{log} \left\vert \text{det} {\partial z
 # \over \partial x} \right\vert_{\theta} + \text{log} p_{Z}(Z)$.
+
+# %%
+
+
+class GELU(nn.Module):
+    r""" """
+
+    DRJIT_STRUCT = {}
+
+    def __call__(self, arg: nn.CoopVec, /) -> nn.CoopVec:
+        return (
+            0.5
+            * arg
+            * (1 + dr.tanh(dr.sqrt(2 / dr.pi) * (arg + 0.044715 * arg * arg * arg)))
+        )
+
+
+x = dr.linspace(Float32, -5, 5, 1000)
+y = GELU()(x)
+plt.plot(x, y)
 
 # %%
 
@@ -118,35 +142,26 @@ class PermutationLayer(FlowLayer):
         return z, ldj
 
 
-class GELU(nn.Module):
-    r""" """
-
-    DRJIT_STRUCT = {}
-
-    def __call__(self, arg: nn.CoopVec, /) -> nn.CoopVec:
-        return (
-            0.5
-            * arg
-            * (1 + dr.tanh(dr.sqrt(2 / dr.pi) * (arg + 0.044715 * arg * arg * arg)))
-        )
-
-
 class CouplingLayer(FlowLayer):
 
     DRJIT_STRUCT = {
         "net": nn.Sequential,
+        "config": tuple,
     }
 
     def __init__(
-        self, n_layers: int = 3, width: int = 2, n_activations: int = 64
+        self, n_layers: int = 4, width: int = 2, n_activations: int = 32
     ) -> None:
         super().__init__()
 
+        self.config = (width,)
+
         sequential = []
-        sequential.append(nn.Linear(width // 2, n_activations))
+        # sequential.append(nn.SinEncode(octaves=16, shift=0.2))
+        sequential.append(nn.Linear(-1, n_activations))
         for i in range(n_layers - 2):
             sequential.append(nn.Linear(n_activations, n_activations))
-            sequential.append(GELU())
+            sequential.append(nn.ReLU())
         sequential.append(nn.Linear(n_activations, width))
 
         self.net = nn.Sequential(*sequential)
@@ -184,7 +199,11 @@ class CouplingLayer(FlowLayer):
         self, dtype: type[dr.ArrayBase], size: int, rng: dr.random.Generator, /
     ) -> tuple[nn.Module, int]:
 
-        net, _ = self.net._alloc(dtype, size // 2, rng)
+        (width,) = self.config
+        if width < 0:
+            width = size
+
+        net, _ = self.net._alloc(dtype, width // 2, rng)
 
         result = CouplingLayer()
         result.net = net
@@ -225,11 +244,9 @@ class Flow(nn.Module):
 
         for layer in self.layers:
             x, ldj = layer.forward(x)
-            log_p += ldj
+            log_p += Float32(ldj)
 
-        z = x
-
-        log_p += self.eval_base_dist_log(z)
+        log_p += self.eval_base_dist_log(x)
         return log_p
 
     def sample(self, sample: nn.CoopVec) -> nn.CoopVec:
@@ -259,15 +276,8 @@ class Flow(nn.Module):
 
 # %%
 
-n_layers_per_cl = 5
 layers = [
-    CouplingLayer(),
-    PermutationLayer(),
-    CouplingLayer(),
-    PermutationLayer(),
-    CouplingLayer(),
-    PermutationLayer(),
-    CouplingLayer(),
+    *[CouplingLayer(), PermutationLayer()] * 4,
 ]
 flow = Flow(*layers)
 
@@ -282,7 +292,8 @@ opt = Adam(lr=0.001, params={"weights": Float32(weights)})
 scaler = GradScaler()
 
 batch_size = 2**14
-n = 100
+n = 200
+losses = []
 
 iterator = tqdm.tqdm(range(n))
 for it in iterator:
@@ -293,14 +304,22 @@ for it in iterator:
     x = nn.CoopVec(ArrayXf16(x))
 
     log_p = flow.log_p(x)
+    log_p[dr.isnan(log_p)] = 0
+    log_p[dr.isinf(log_p)] = 0
     loss_kl = -dr.mean(log_p)
 
     dr.backward(scaler.scale(loss_kl))
     scaler.step(opt)
 
     if (it + 1) % 1 == 0:
-        iterator.set_postfix({"loss_kl": loss_kl.numpy().item()})
+        loss = loss_kl.numpy().item()
+        iterator.set_postfix({"loss_kl": loss})
+        losses.append(loss)
 
+# %%
+plt.plot(losses)
+plt.ylabel("KL loss")
+plt.xlabel("it")
 # %%
 
 x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 1_000_000)))))
