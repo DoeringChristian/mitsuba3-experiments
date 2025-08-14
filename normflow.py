@@ -85,8 +85,20 @@ class PermutationLayer(FlowLayer):
         ldj = Float16(0)
         return z, ldj
 
+    def _alloc(
+        self, dtype: type[dr.ArrayBase], size: int, rng: dr.random.Generator, /
+    ) -> tuple[nn.Module, int]:
+
+        result = PermutationLayer()
+
+        return result, size
+
 
 class CouplingLayer(FlowLayer):
+
+    DRJIT_STRUCT = {
+        "net": nn.Sequential,
+    }
 
     def __init__(self, n_layers: int = 3, n_activations: int = 64) -> None:
         super().__init__()
@@ -138,17 +150,27 @@ class CouplingLayer(FlowLayer):
 
         return z, ldj
 
+    def _alloc(
+        self, dtype: type[dr.ArrayBase], size: int, rng: dr.random.Generator, /
+    ) -> tuple[nn.Module, int]:
+
+        net, n_activations = self.net._alloc(dtype, size, rng)
+
+        result = CouplingLayer(n_activations=n_activations)
+        result.net = net
+
+        return result, size
+
 
 class Flow(nn.Module):
-    def __init__(self, n_layers: int = 3) -> None:
+
+    DRJIT_STRUCT = {
+        "layers": list[FlowLayer],
+    }
+
+    def __init__(self, *args: FlowLayer) -> None:
         super().__init__()
-
-        layers: list[FlowLayer] = []
-        for i in range(n_layers):
-            layers.append(CouplingLayer())
-            layers.append(PermutationLayer())
-
-        self.layers = layers
+        self.layers = args
 
     def sample_base_dist(self, sample: nn.CoopVec) -> nn.CoopVec:
         return nn.CoopVec(*[uniform_to_std_normal(x) for x in sample])
@@ -184,3 +206,33 @@ class Flow(nn.Module):
             z = layer.inverse(z)
 
         return z
+
+    def _alloc(
+        self, dtype: type[dr.ArrayBase], size: int, rng: dr.random.Generator, /
+    ) -> tuple[nn.Module, int]:
+
+        layers = []
+        for l in self.layers:
+            l_new, size = l._alloc(dtype, size, rng)
+            layers.append(l_new)
+
+        result = Flow(*layers)
+        return result, size
+
+
+# %%
+
+layers = [
+    CouplingLayer(),
+    PermutationLayer(),
+    CouplingLayer(),
+    PermutationLayer(),
+    CouplingLayer(),
+]
+flow = Flow(*layers)
+
+flow = flow.alloc(TensorXf16)
+
+weights, flow = nn.pack(flow, "training")
+print(weights.shape)
+print(flow)
