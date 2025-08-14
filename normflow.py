@@ -7,7 +7,7 @@ import numpy as np
 import drjit as dr
 import drjit.nn as nn
 from drjit.opt import Adam, GradScaler
-from drjit.auto.ad import (
+from drjit.llvm.ad import (
     Texture2f,
     TensorXf,
     TensorXf16,
@@ -19,7 +19,7 @@ from drjit.auto.ad import (
 )
 import mitsuba as mi
 
-mi.set_variant("cuda_ad_rgb", "llvm_ad_rgb")
+mi.set_variant("llvm_ad_rgb")
 
 # %%
 
@@ -47,7 +47,9 @@ x = mi.Point2f(x) / mi.Vector2f(ref_np.shape[0], ref_np.shape[1])
 
 fig, ax = plt.subplots(1, 2)
 hist, _, _ = np.histogram2d(x.y, x.x, bins=ref_np.shape[0], density=True)
+ax[0].set_title("sampled")
 ax[0].imshow(hist)
+ax[0].set_title("evaluated")
 ax[1].imshow(ref_np)
 
 
@@ -73,13 +75,12 @@ ax[1].imshow(ref_np)
 # %%
 
 
-def uniform_to_std_normal(x: dr.ArrayBase):
-    y = dr.zeros_like(x)
+def square_to_std_normal(x: dr.ArrayBase, y: dr.ArrayBase):
     r = dr.sqrt(-2.0 * dr.log(1.0 - x))
     phi = 2.0 * dr.pi * y
 
-    c = dr.cos(phi)
-    return c * r
+    s, c = dr.sincos(phi)
+    return c * r, s * r
 
 
 def std_normal_pdf(z: dr.ArrayBase):
@@ -87,6 +88,7 @@ def std_normal_pdf(z: dr.ArrayBase):
 
 
 def log_std_normal_pdf(z: dr.ArrayBase):
+    return dr.log(std_normal_pdf(z))
     return dr.log(dr.inv_two_pi) + (-0.5 * dr.square(z))
 
 
@@ -196,7 +198,14 @@ class Flow(nn.Module):
         self.layers = args
 
     def sample_base_dist(self, sample: nn.CoopVec) -> nn.CoopVec:
-        return nn.CoopVec(*[uniform_to_std_normal(x) for x in sample])
+        sample = list(sample)
+        z = []
+        for i in range(0, len(sample), 2):
+            x, y = square_to_std_normal(Float32(sample[i]), Float32(sample[i + 1]))
+            z.append(Float16(x))
+            z.append(Float16(y))
+
+        return nn.CoopVec(*z)
 
     def eval_base_dist_log(self, z: nn.CoopVec) -> dr.ArrayBase:
         return dr.sum([log_std_normal_pdf(z) for z in z])
@@ -247,27 +256,25 @@ class Flow(nn.Module):
 
 layers = [
     CouplingLayer(),
-    PermutationLayer(),
-    CouplingLayer(),
-    PermutationLayer(),
-    CouplingLayer(),
+    # PermutationLayer(),
+    # CouplingLayer(),
+    # PermutationLayer(),
+    # CouplingLayer(),
 ]
 flow = Flow(*layers)
 
 flow: Flow = flow.alloc(TensorXf16, rng=rng)
 
 weights, flow = nn.pack(flow, "training")
-print(weights.shape)
-print(flow)
 
 # %%
 
-opt = Adam(lr=0.0001, params={"weights": Float32(weights)})
+opt = Adam(lr=0.001, params={"weights": Float32(weights)})
 
 scaler = GradScaler()
 
 batch_size = 2**14
-n = 1_000
+n = 10
 
 iterator = tqdm.tqdm(range(n))
 for it in iterator:
@@ -289,7 +296,25 @@ for it in iterator:
 # %%
 
 x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 1_000_000)))))
+hist, _, _ = np.histogram2d(
+    x[1], x[0], bins=ref_np.shape[0], density=True, range=[[0, 1], [0, 1]]
+)
+
+x = rng.random(ArrayXf16, (2, 1_000_000))
+log_p = flow.log_p(nn.CoopVec(x))
+p = dr.exp(log_p)
+hist2, _, _ = np.histogram2d(
+    x[1],
+    x[0],
+    bins=ref_np.shape[0],
+    density=True,
+    weights=p,
+    range=[[0, 1], [0, 1]],
+)
 
 fig, ax = plt.subplots(1, 2)
-hist, _, _ = np.histogram2d(x[1], x[0], bins=ref_np.shape[0], density=True)
+
+ax[0].set_title("sampled")
 ax[0].imshow(hist)
+ax[0].set_title("evaluated")
+ax[1].imshow(hist2)
