@@ -1,8 +1,11 @@
 # %%
+import imageio.v3 as iio
+import tqdm
+import matplotlib.pyplot as plt
+import numpy as np
+
 import drjit as dr
 import drjit.nn as nn
-import imageio.v3 as iio
-
 from drjit.opt import Adam, GradScaler
 from drjit.auto.ad import (
     Texture2f,
@@ -10,9 +13,17 @@ from drjit.auto.ad import (
     TensorXf16,
     Float16,
     Float32,
+    ArrayXf16,
     Array2f,
     Array3f,
 )
+import mitsuba as mi
+
+mi.set_variant("cuda_ad_rgb", "llvm_ad_rgb")
+
+# %%
+
+rng = dr.rng(seed=0)
 
 # %%
 
@@ -22,7 +33,22 @@ ref = TensorXf(
     )
     / 256
 )
-tex = Texture2f(dr.mean(ref, axis=-1)[:, :, None])
+ref = dr.mean(ref, axis=-1)[:, :, None]
+ref = ref / dr.mean(ref, axis=None)
+tex = Texture2f(ref)
+
+# %%
+
+ref_np = ref.numpy()[:, :, 0]
+dist_ref = mi.DiscreteDistribution2D(ref_np)
+
+x, _, _ = dist_ref.sample(rng.random(mi.Point2f, (2, 1_000_000)))
+x = mi.Point2f(x) / mi.Vector2f(ref_np.shape[0], ref_np.shape[1])
+
+fig, ax = plt.subplots(1, 2)
+hist, _, _ = np.histogram2d(x.y, x.x, bins=ref_np.shape[0], density=True)
+ax[0].imshow(hist)
+ax[1].imshow(ref_np)
 
 
 # %% [markdown]
@@ -56,8 +82,12 @@ def uniform_to_std_normal(x: dr.ArrayBase):
     return c * r
 
 
-def uniform_to_std_normal_pdf(z: dr.ArrayBase):
+def std_normal_pdf(z: dr.ArrayBase):
     return dr.inv_two_pi * dr.exp(-0.5 * dr.square(z))
+
+
+def log_std_normal_pdf(z: dr.ArrayBase):
+    return dr.log(dr.inv_two_pi) + (-0.5 * dr.square(z))
 
 
 class FlowLayer(nn.Module):
@@ -100,15 +130,17 @@ class CouplingLayer(FlowLayer):
         "net": nn.Sequential,
     }
 
-    def __init__(self, n_layers: int = 3, n_activations: int = 64) -> None:
+    def __init__(
+        self, n_layers: int = 3, width: int = 1, n_activations: int = 64
+    ) -> None:
         super().__init__()
 
         sequential = []
-        for i in range(n_layers - 1):
+        sequential.append(nn.Linear(width, n_activations))
+        for i in range(n_layers - 2):
             sequential.append(nn.Linear(n_activations, n_activations))
             sequential.append(nn.ReLU())
-
-        sequential.append(nn.Linear(n_activations, n_activations))
+        sequential.append(nn.Linear(n_activations, width * 2))
 
         self.net = nn.Sequential(*sequential)
 
@@ -119,14 +151,10 @@ class CouplingLayer(FlowLayer):
         """
         z: list = list(z)
         d = len(z) // 2
-
-        id, z2 = z[:d, d:]
-
-        p = list(self.net(nn.CoopVec(id)))
-        a, mu = p[:d], p[d:]
-
+        id, z2 = z[:d], z[d:]
+        p = ArrayXf16(self.net(nn.CoopVec(id)))
+        a, mu = p[:d, :], p[d:, :]
         x2 = (z2 - mu) * dr.exp(-a)
-
         x = nn.CoopVec(id, x2)
         return x
 
@@ -135,28 +163,23 @@ class CouplingLayer(FlowLayer):
         This function evaluates the foward flow $Z = f_\theta(X)$, as well as
         the log jacobian determinant.
         """
-
         x = list(x)
         d = len(x) // 2
-
         id, x2 = x[:d], x[d:]
-
-        p = list(self.net(nn.CoopVec(id)))
-        a, mu = p[:d], p[d:]
-
+        p = ArrayXf16(self.net(nn.CoopVec(id)))
+        a, mu = p[:d, :], p[d:, :]
         z2 = x2 * dr.exp(a) + mu
         z = nn.CoopVec(id, z2)
         ldj = dr.sum(a)
-
         return z, ldj
 
     def _alloc(
         self, dtype: type[dr.ArrayBase], size: int, rng: dr.random.Generator, /
     ) -> tuple[nn.Module, int]:
 
-        net, n_activations = self.net._alloc(dtype, size, rng)
+        net, _ = self.net._alloc(dtype, size // 2, rng)
 
-        result = CouplingLayer(n_activations=n_activations)
+        result = CouplingLayer()
         result.net = net
 
         return result, size
@@ -175,8 +198,8 @@ class Flow(nn.Module):
     def sample_base_dist(self, sample: nn.CoopVec) -> nn.CoopVec:
         return nn.CoopVec(*[uniform_to_std_normal(x) for x in sample])
 
-    def eval_base_dist(self, z: nn.CoopVec) -> dr.ArrayBase:
-        return dr.prod([uniform_to_std_normal_pdf(z) for z in z])
+    def eval_base_dist_log(self, z: nn.CoopVec) -> dr.ArrayBase:
+        return dr.sum([log_std_normal_pdf(z) for z in z])
 
     def log_p(self, x: nn.CoopVec) -> Float16:
         """
@@ -184,7 +207,7 @@ class Flow(nn.Module):
         `x`.
         """
 
-        log_p = dr.zeros(x.dtype)
+        log_p = dr.zeros(x.type)
 
         for layer in self.layers:
             x, ldj = layer.forward(x)
@@ -192,7 +215,7 @@ class Flow(nn.Module):
 
         z = x
 
-        log_p += dr.log(self.eval_base_dist(z))
+        log_p += self.eval_base_dist_log(z)
         return log_p
 
     def sample(self, sample: nn.CoopVec) -> nn.CoopVec:
@@ -231,8 +254,42 @@ layers = [
 ]
 flow = Flow(*layers)
 
-flow = flow.alloc(TensorXf16)
+flow: Flow = flow.alloc(TensorXf16, rng=rng)
 
 weights, flow = nn.pack(flow, "training")
 print(weights.shape)
 print(flow)
+
+# %%
+
+opt = Adam(lr=0.0001, params={"weights": Float32(weights)})
+
+scaler = GradScaler()
+
+batch_size = 2**14
+n = 1_000
+
+iterator = tqdm.tqdm(range(n))
+for it in iterator:
+    weights[:] = Float16(opt["weights"])
+
+    x, _, _ = dist_ref.sample(rng.random(mi.Point2f, (2, batch_size)))
+    x = mi.Point2f(x) / mi.Vector2f(ref_np.shape[0], ref_np.shape[1])
+    x = nn.CoopVec(ArrayXf16(x))
+
+    log_p = flow.log_p(x)
+    loss_kl = -dr.mean(log_p)
+
+    dr.backward(scaler.scale(loss_kl))
+    scaler.step(opt)
+
+    if (it + 1) % 1 == 0:
+        iterator.set_postfix({"loss_kl": loss_kl.numpy().item()})
+
+# %%
+
+x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 1_000_000)))))
+
+fig, ax = plt.subplots(1, 2)
+hist, _, _ = np.histogram2d(x[1], x[0], bins=ref_np.shape[0], density=True)
+ax[0].imshow(hist)
