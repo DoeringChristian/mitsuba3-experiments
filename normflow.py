@@ -117,13 +117,18 @@ class PermutationLayer(FlowLayer):
         ldj = Float16(0)
         return z, ldj
 
-    def _alloc(
-        self, dtype: type[dr.ArrayBase], size: int, rng: dr.random.Generator, /
-    ) -> tuple[nn.Module, int]:
 
-        result = PermutationLayer()
+class GELU(nn.Module):
+    r""" """
 
-        return result, size
+    DRJIT_STRUCT = {}
+
+    def __call__(self, arg: nn.CoopVec, /) -> nn.CoopVec:
+        return (
+            0.5
+            * arg
+            * (1 + dr.tanh(dr.sqrt(2 / dr.pi) * (arg + 0.044715 * arg * arg * arg)))
+        )
 
 
 class CouplingLayer(FlowLayer):
@@ -133,16 +138,16 @@ class CouplingLayer(FlowLayer):
     }
 
     def __init__(
-        self, n_layers: int = 3, width: int = 1, n_activations: int = 64
+        self, n_layers: int = 3, width: int = 2, n_activations: int = 64
     ) -> None:
         super().__init__()
 
         sequential = []
-        sequential.append(nn.Linear(width, n_activations))
+        sequential.append(nn.Linear(width // 2, n_activations))
         for i in range(n_layers - 2):
             sequential.append(nn.Linear(n_activations, n_activations))
-            sequential.append(nn.ReLU())
-        sequential.append(nn.Linear(n_activations, width * 2))
+            sequential.append(GELU())
+        sequential.append(nn.Linear(n_activations, width))
 
         self.net = nn.Sequential(*sequential)
 
@@ -254,12 +259,15 @@ class Flow(nn.Module):
 
 # %%
 
+n_layers_per_cl = 5
 layers = [
     CouplingLayer(),
-    # PermutationLayer(),
-    # CouplingLayer(),
-    # PermutationLayer(),
-    # CouplingLayer(),
+    PermutationLayer(),
+    CouplingLayer(),
+    PermutationLayer(),
+    CouplingLayer(),
+    PermutationLayer(),
+    CouplingLayer(),
 ]
 flow = Flow(*layers)
 
@@ -274,7 +282,7 @@ opt = Adam(lr=0.001, params={"weights": Float32(weights)})
 scaler = GradScaler()
 
 batch_size = 2**14
-n = 10
+n = 100
 
 iterator = tqdm.tqdm(range(n))
 for it in iterator:
