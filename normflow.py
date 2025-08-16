@@ -305,7 +305,8 @@ opt = Adam(lr=0.001, params={"weights": Float32(weights)})
 scaler = GradScaler()
 
 batch_size = 2**14
-n = 1_000
+n = 300
+its = []
 losses = []
 d_kls = []
 
@@ -330,16 +331,17 @@ for it in iterator:
         losses.append(loss)
         d_kl = kl_divergence(flow)
         d_kls.append(d_kl)
+        its.append(it)
         iterator.set_postfix({"loss_kl": loss, "d_kl": d_kl})
 
 # %%
 
-plt.plot(losses)
+plt.plot(its, losses)
 plt.ylabel("KL loss")
 plt.xlabel("it")
 
 # %%
-plt.plot(d_kls)
+plt.plot(its, d_kls)
 plt.ylabel("KL divergence")
 plt.xlabel("it")
 
