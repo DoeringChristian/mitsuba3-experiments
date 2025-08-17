@@ -113,6 +113,27 @@ plt.plot(x, y)
 # %%
 
 
+class TwoAlign(nn.Module):
+    r""" """
+
+    DRJIT_STRUCT = {}
+
+    def _alloc(
+        self, dtype: type[dr.ArrayBase], size: int, rng: dr.random.Generator, /
+    ) -> tuple[nn.Module, int]:
+        return self, size if size % 2 == 0 else size + 1
+
+    def __call__(self, arg: nn.CoopVec, /) -> nn.CoopVec:
+        tp = arg.type
+        arg = list(arg)
+        if len(arg) % 2 != 0:
+            arg.append(tp(0))
+        return nn.CoopVec(*arg)
+
+
+# %%
+
+
 class FlowLayer(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -147,15 +168,17 @@ class CouplingLayer(FlowLayer):
     }
 
     def __init__(
-        self, n_hidden: int = 4, width: int = 2, n_activations: int = 32
+        self, n_hidden: int = 1, width: int = 2, n_activations: int = 32
     ) -> None:
         super().__init__()
 
         self.config = (width,)
 
         sequential = []
-        sequential.append(nn.TriEncode(1, 0))
+        # sequential.append(nn.TriEncode(16, 0))
+        sequential.append(TwoAlign())
         sequential.append(nn.Linear(-1, n_activations))
+        sequential.append(GELU())
         for i in range(n_hidden):
             sequential.append(nn.Linear(n_activations, n_activations))
             sequential.append(GELU())
@@ -168,13 +191,12 @@ class CouplingLayer(FlowLayer):
         This function represents the inverse evaluation of the coupling layer,
         i.e. $X = f^{-1}_\theta(Z)$.
         """
-        z: list = list(z)
+        z: list = ArrayXf16(z)
         d = len(z) // 2
-        id, z2 = z[:d], z[d:]
-        print(f"{nn.CoopVec(id)=}")
+        id, z2 = z[:d, :], z[d:, :]
         p = ArrayXf16(self.net(nn.CoopVec(id)))
-        a, mu = p[:d, :], p[d:, :]
-        x2 = (z2 - mu) * dr.exp(-a)
+        log_s, b = p[:d, :], p[d:, :]
+        x2 = (z2 - b) * dr.exp(-log_s)
         x = nn.CoopVec(id, x2)
         return x
 
@@ -183,14 +205,14 @@ class CouplingLayer(FlowLayer):
         This function evaluates the foward flow $Z = f_\theta(X)$, as well as
         the log jacobian determinant.
         """
-        x = list(x)
+        x = ArrayXf16(x)
         d = len(x) // 2
-        id, x2 = x[:d], x[d:]
+        id, x2 = x[:d, :], x[d:, :]
         p = ArrayXf16(self.net(nn.CoopVec(id)))
-        a, mu = p[:d, :], p[d:, :]
-        z2 = x2 * dr.exp(a) + mu
+        log_s, b = p[:d, :], p[d:, :]
+        z2 = x2 * dr.exp(log_s) + b
         z = nn.CoopVec(id, z2)
-        ldj = dr.sum(a)
+        ldj = dr.sum(log_s)
         return z, ldj
 
     def _alloc(
@@ -275,19 +297,19 @@ class Flow(nn.Module):
 # %%
 
 layers = [
-    *[CouplingLayer(), PermutationLayer()] * 4,
-    # CouplingLayer(),
+    # *[CouplingLayer(), PermutationLayer()] * 4,
+    CouplingLayer(),
     # PermutationLayer(),
     # CouplingLayer(),
 ]
-flow = Flow(*layers)
+flow: Flow = Flow(*layers)
 
-flow: Flow = flow.alloc(TensorXf16, rng=rng)
+flow = flow.alloc(TensorXf16, rng=rng)
 
 weights, flow = nn.pack(flow, "training")
 
 # %%
-x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 100_000)))))
+x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 1_000_000)))))
 fig, ax = plt.subplots(1, 1, figsize=(6, 6))
 ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
 ax.set_title("flow")
@@ -314,8 +336,8 @@ for it in iterator:
     x = nn.CoopVec(ArrayXf16(x))
 
     log_p = flow.log_p(x)
-    log_p[dr.isnan(log_p)] = 0
-    log_p[dr.isinf(log_p)] = 0
+    # log_p[dr.isnan(log_p)] = 0
+    # log_p[dr.isinf(log_p)] = 0
     loss_kl = -dr.mean(log_p)
 
     dr.backward(scaler.scale(loss_kl))
@@ -333,7 +355,12 @@ plt.ylabel("KL loss")
 plt.xlabel("it")
 
 # %%
-x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 100_000)))))
+x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 1_000_000)))))
 fig, ax = plt.subplots(1, 1, figsize=(6, 6))
 ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
 ax.set_title("flow")
+
+# %%
+x = dr.linspace(Float16, -4, 4, 1_000)
+a = list(flow.layers[0].net(nn.CoopVec(x)))[0]
+plt.plot(x, a)
