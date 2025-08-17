@@ -27,6 +27,7 @@ rng = dr.rng(seed=0)
 
 # %%
 
+
 def square_to_std_normal(sample: Array2f):
     r = dr.sqrt(-2.0 * dr.log(1.0 - sample[0]))
     phi = 2.0 * dr.pi * sample[1]
@@ -38,32 +39,36 @@ def square_to_std_normal(sample: Array2f):
 def log_std_normal_pdf(z: dr.ArrayBase):
     return dr.log(dr.inv_two_pi) - 0.5 * dr.square(z)
 
+
 # %%
 
+
 class SpiralDistr:
-    def __init__(self) -> None:
-        ...
+    def __init__(self) -> None: ...
     def sample(self, sample1: Float32, sample2: Array2f):
-        r = sample1
-        phi = sample1  * dr.two_pi * 2
+        sample1 = dr.sqrt(sample1)
+        r = sample1 * 4
+        phi = sample1 * dr.two_pi * 2
 
         s, c = dr.sincos(phi)
         x = Array2f(s * r, c * r)
-        y = square_to_std_normal(sample2) / 20
+        y = square_to_std_normal(sample2) * 0.2
 
         return x + y
+
 
 ref = SpiralDistr()
 
 # %%
 
 n_bins = 256
+hist_range = [[-5, 5], [-5, 5]]
 
-sample1 = rng.random(Float32,  100_000)
+sample1 = rng.random(Float32, 100_000)
 sample2 = rng.random(Array2f, (2, 100_000))
-x= ref.sample(sample1, sample2)
-fig, ax = plt.subplots(1, 1, figsize = (6, 6))
-ax.hist2d(x[0], x[1], bins = n_bins, range = [[-1, 1], [-1, 1]])
+x = ref.sample(sample1, sample2)
+fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
 ax.set_title("sampled")
 
 # %% [markdown]
@@ -106,7 +111,6 @@ y = GELU()(x)
 plt.plot(x, y)
 
 # %%
-
 
 
 class FlowLayer(nn.Module):
@@ -284,9 +288,9 @@ weights, flow = nn.pack(flow, "training")
 
 # %%
 x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 100_000)))))
-fig, ax = plt.subplots(1, 1, figsize = (6, 6))
+fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
 ax.set_title("flow")
-ax.hist2d(x[0], x[1], bins = n_bins, range = [[-1, 1], [-1, 1]])
 
 
 # %%
@@ -304,9 +308,9 @@ iterator = tqdm.tqdm(range(n))
 for it in iterator:
     weights[:] = Float16(opt["weights"])
 
-    sample1 = rng.random(Float32,  batch_size)
+    sample1 = rng.random(Float32, batch_size)
     sample2 = rng.random(Array2f, (2, batch_size))
-    x= ref.sample(sample1, sample2)
+    x = ref.sample(sample1, sample2)
     x = nn.CoopVec(ArrayXf16(x))
 
     log_p = flow.log_p(x)
@@ -330,6 +334,6 @@ plt.xlabel("it")
 
 # %%
 x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 100_000)))))
-fig, ax = plt.subplots(1, 1, figsize = (6, 6))
+fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
 ax.set_title("flow")
-ax.hist2d(x[0], x[1], bins = n_bins, range = [[-1, 1], [-1, 1]])
