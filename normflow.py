@@ -46,13 +46,14 @@ def log_std_normal_pdf(z: dr.ArrayBase):
 class SpiralDistr:
     def __init__(self) -> None: ...
     def sample(self, sample1: Float32, sample2: Array2f):
-        sample1 = dr.sqrt(sample1)
-        r = sample1 * 4
-        phi = sample1 * dr.two_pi * 2
+        sample1 = sample1 * 2 - 1
+        t = dr.sqrt(dr.abs(sample1))
+        r = t * 4 * dr.sign(sample1)
+        phi = t * dr.two_pi * 1.5
 
         s, c = dr.sincos(phi)
-        x = Array2f(s * r, c * r)
-        y = square_to_std_normal(sample2) * 0.2
+        x = Array2f(c * r, s * r)
+        y = square_to_std_normal(sample2) * 0.15
 
         return x + y
 
@@ -178,10 +179,10 @@ class CouplingLayer(FlowLayer):
         # sequential.append(nn.TriEncode(16, 0))
         sequential.append(TwoAlign())
         sequential.append(nn.Linear(-1, n_activations))
-        sequential.append(GELU())
+        sequential.append(nn.ReLU())
         for i in range(n_hidden):
             sequential.append(nn.Linear(n_activations, n_activations))
-            sequential.append(GELU())
+            sequential.append(nn.ReLU())
         sequential.append(nn.Linear(n_activations, width))
 
         self.net = nn.Sequential(*sequential)
@@ -297,8 +298,8 @@ class Flow(nn.Module):
 # %%
 
 layers = [
-    # *[CouplingLayer(), PermutationLayer()] * 4,
-    CouplingLayer(),
+    *[CouplingLayer(), PermutationLayer()] * 4,
+    # CouplingLayer(),
     # PermutationLayer(),
     # CouplingLayer(),
 ]
@@ -314,6 +315,12 @@ fig, ax = plt.subplots(1, 1, figsize=(6, 6))
 ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
 ax.set_title("flow")
 
+# %%
+x = dr.linspace(Float16, -4, 4, 1_000)
+n = list(flow.layers[0].net(nn.CoopVec(x)))
+plt.plot(x, n[0], label="log_s")
+plt.plot(x, n[1], label="b")
+plt.legend()
 
 # %%
 
@@ -321,8 +328,8 @@ opt = Adam(lr=0.001, params={"weights": Float32(weights)})
 
 scaler = GradScaler()
 
-batch_size = 2**14
-n = 1_000
+batch_size = 128
+n = 100_000
 its = []
 losses = []
 
@@ -336,8 +343,8 @@ for it in iterator:
     x = nn.CoopVec(ArrayXf16(x))
 
     log_p = flow.log_p(x)
-    # log_p[dr.isnan(log_p)] = 0
-    # log_p[dr.isinf(log_p)] = 0
+    log_p[dr.isnan(log_p)] = 0
+    log_p[dr.isinf(log_p)] = 0
     loss_kl = -dr.mean(log_p)
 
     dr.backward(scaler.scale(loss_kl))
@@ -362,5 +369,14 @@ ax.set_title("flow")
 
 # %%
 x = dr.linspace(Float16, -4, 4, 1_000)
-a = list(flow.layers[0].net(nn.CoopVec(x)))[0]
-plt.plot(x, a)
+n = list(flow.layers[0].net(nn.CoopVec(x)))
+plt.plot(x, n[0], label="log_s")
+plt.plot(x, n[1], label="b")
+plt.legend()
+
+# %%
+x = dr.linspace(Float16, -4, 4, 1_000)
+n = list(flow.layers[2].net(nn.CoopVec(x)))
+plt.plot(x, n[0], label="log_s")
+plt.plot(x, n[1], label="b")
+plt.legend()
