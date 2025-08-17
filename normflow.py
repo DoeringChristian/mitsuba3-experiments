@@ -333,7 +333,6 @@ class CouplingLayer(FlowLayer):
         self.config = (width,)
 
         sequential = []
-        # sequential.append(nn.TriEncode(16, 0))
         sequential.append(TwoAlign())
         sequential.append(nn.Linear(-1, n_activations))
         sequential.append(nn.ReLU())
@@ -389,6 +388,10 @@ class CouplingLayer(FlowLayer):
         return result, size
 
 
+# %% [markdown]
+# The `Flow` model combines coupling and permutation layers to sample and
+# evaluate the learned target distribution.
+
 # %%
 
 
@@ -403,6 +406,9 @@ class Flow(nn.Module):
         self.layers = args
 
     def sample_base_dist(self, sample: nn.CoopVec) -> nn.CoopVec:
+        """
+        Samples the base distribution, given a uniformly distributed sample.
+        """
         sample = list(sample)
         z = []
         for i in range(0, len(sample), 2):
@@ -413,6 +419,9 @@ class Flow(nn.Module):
         return nn.CoopVec(*z)
 
     def eval_log_base_dist(self, z: nn.CoopVec) -> dr.ArrayBase:
+        """
+        Evaluates the log probabilitiy of the base distribution.
+        """
         return dr.sum([log_std_normal_pdf(z) for z in z])
 
     def log_eval(self, x: nn.CoopVec) -> Float16:
@@ -469,27 +478,33 @@ class FlowDistr(Distr2D):
         return x
 
 
+# %% [markdown]
+# Now that we have defined the normalizing flow model, we can initialize it and
+# allocate weights in training optimal mode. We also visualize the initial
+# distribution.
+
 # %%
 
 layers = [
     *[CouplingLayer(), PermutationLayer()] * 4,
-    # CouplingLayer(),
-    # PermutationLayer(),
-    # CouplingLayer(),
 ]
 flow: Flow = Flow(*layers)
-
 flow = flow.alloc(TensorXf16, rng=rng)
-
 weights, flow = nn.pack(flow, "training")
 
 # %%
 plot_hist(("Initial", FlowDistr(flow)), ("Reference", ref))
 
+# %% [markdown]
+# ## Training
+# To train the flow model, we sample variables $X_i$ from the reference
+# distribution, and maximize the log probability of the flow model for this
+# value. This is equivalent to minimizing the KL-Divergence of the flow model
+# w.r.t. the reference distribution.
+
 # %%
 
 opt = Adam(lr=0.001, params={"weights": Float32(weights)})
-
 scaler = GradScaler()
 
 batch_size = 2**14
@@ -505,8 +520,6 @@ for it in iterator:
     x = nn.CoopVec(ArrayXf16(x))
 
     log_p = flow.log_eval(x)
-    log_p[dr.isnan(log_p)] = 0
-    log_p[dr.isinf(log_p)] = 0
     loss_kl = -dr.mean(log_p)
 
     dr.backward(scaler.scale(loss_kl))
@@ -518,6 +531,16 @@ for it in iterator:
         its.append(it)
         iterator.set_postfix({"loss_kl": loss})
 
+# %% [markdown]
+# We can visualize the loss value. It is equivalent to the KL divergence
+# without the entropy term.
+# $$
+# \mathcal{L} = \sum \log(p_{X;\theta}(X_i)) \approx
+# E_{\widehat{p_X}}\left[-\log p_{X;\theta} \right] =
+# D_\text{KL}\left(\widehat{p_X} || p_{X;\theta}\right) - E
+# \left[\widehat{p_X}\right]
+# $$
+
 # %%
 plt.plot(its, losses)
 plt.ylabel("KL loss")
@@ -525,6 +548,10 @@ plt.xlabel("it")
 
 # %%
 plot_hist(("Learned", FlowDistr(flow)), ("Reference", ref))
+
+# %% [markdown]
+# Finally, it can be interesting to plot the learned output of the network used
+# in the coupling layers.
 
 # %%
 x = dr.linspace(Float16, -4, 4, 1_000)
