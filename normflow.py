@@ -61,16 +61,36 @@ def log_std_normal_pdf(z: dr.ArrayBase):
     return dr.log(dr.inv_two_pi) - 0.5 * dr.square(z)
 
 
+# %% [markdown]
+# ## Reference Distribution
+# To train a flow model, we have to sample values from a reference distribution
+# $\widehat{p_X}$. In this example, we sample from a double spiral.
+# We first define a `Distr2D` interface, representing a sampleable distribution.
+# It has a function `sample`, which takes a random number generator and the
+# number of samples to be generated, and returns 2d coordinates.
+
 # %%
 
 
-class SpiralDistr:
+class Distr2D:
+    def sample(
+        self,
+        rng: dr.random.Generator,
+        n: int,
+    ) -> Array2f: ...
+
+
+class SpiralDistr(Distr2D):
+    """
+    This distrubution generates samples according to a spiral patern.
+    """
+
     def __init__(self) -> None: ...
     def sample(
         self,
         rng: dr.random.Generator,
         n: int,
-    ):
+    ) -> Array2f:
         sample1 = rng.random(Float32, n)
         sample2 = rng.random(Array2f, (2, n))
 
@@ -86,17 +106,28 @@ class SpiralDistr:
         return x + y
 
 
+# %% [markdown]
+# It is also possible to sample values according to an arbitrary distribution,
+# which we can define using an image. To use this distribution, Mitsuba~3 has
+# to be installed, which provides an implementation of a fast discrete
+# distribution.
+
 # %%
 
 
-class ImageDistr:
+class ImageDistr(Distr2D):
+    """
+    This distrubtion generates samples, according to the probability density
+    function represented by an image.
+    """
+
     def __init__(
         self,
         uri: str = "data/albert.jpg",
     ) -> None:
         import mitsuba as mi
 
-        mi.set_variant("cuda_ad_rgb")
+        mi.set_variant("cuda_ad_rgb", "llvm_ad_rgb")
 
         self.mi = mi
 
@@ -113,27 +144,48 @@ class ImageDistr:
         self,
         rng: dr.random.Generator,
         n: int,
-    ):
+    ) -> Array2f:
+        """
+        This function samples points, according to their probability density,
+        represented by the image. We scale the distrubtuion to fit neatly into
+        the [-4, 4]^2 range.
+        """
         mi = self.mi
         x, _, _ = self.distr.sample(rng.random(mi.Point2f, (2, n)))
         m = max(self.shape[0], self.shape[1])
         x = mi.Point2f(x) / mi.Vector2f(m)
         x = mi.Point2f(x.x, 1.0 - x.y)
-        return x * 8 - 4
+        return Array2f(x * 8 - 4)
 
 
-# ref = ImageDistr()
+# To use the image distribution, uncomment the second line.
 ref = SpiralDistr()
+# ref = ImageDistr()
+
+# %% [markdown]
+# To visualize the distribution, we define a function, which plots the
+# histograms of samples from said distribution.
 
 # %%
 
-n_bins = 256
-hist_range = [[-5, 5], [-5, 5]]
 
-x = ref.sample(rng, 1_000_000)
-fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
-ax.set_title("sampled")
+def plot_hist(*distrs: tuple[str, Distr2D]):
+    """
+    Plots the histograms of distributions with their names
+    """
+    n = len(distrs)
+    n_bins = 256
+    hist_range = [[-5, 5], [-5, 5]]
+    fig, ax = plt.subplots(1, n, figsize=(6 * n, 6))
+    ax = [ax] if n == 1 else ax
+    for i in range(n):
+        name, dist = distrs[i]
+        x = dist.sample(rng, 1_000_000)
+        ax[i].hist2d(x[0], x[1], bins=n_bins, range=hist_range)
+        ax[i].set_title(name)
+
+
+plot_hist(("Reference", ref))
 
 # %% [markdown]
 # Normalizing flows can be used to both sample from a learned distribution, but
@@ -318,7 +370,7 @@ class Flow(nn.Module):
     def eval_log_base_dist(self, z: nn.CoopVec) -> dr.ArrayBase:
         return dr.sum([log_std_normal_pdf(z) for z in z])
 
-    def log_p(self, x: nn.CoopVec) -> Float16:
+    def log_eval(self, x: nn.CoopVec) -> Float16:
         """
         This function calculates the log probability of sampling a given value
         `x`.
@@ -358,6 +410,20 @@ class Flow(nn.Module):
         return result, size
 
 
+class FlowDistr(Distr2D):
+    """
+    Wrapper class arround a normalizing flow, to sample from it's distribution
+    using a random number generator.
+    """
+
+    def __init__(self, flow) -> None:
+        self.flow = flow
+
+    def sample(self, rng: dr.random.Generator, n: int) -> Array2f:
+        x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, n)))))
+        return x
+
+
 # %%
 
 layers = [
@@ -373,17 +439,7 @@ flow = flow.alloc(TensorXf16, rng=rng)
 weights, flow = nn.pack(flow, "training")
 
 # %%
-x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 1_000_000)))))
-fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
-ax.set_title("flow")
-
-# %%
-x = dr.linspace(Float16, -4, 4, 1_000)
-n = list(flow.layers[0].net(nn.CoopVec(x)))
-plt.plot(x, n[0], label="log_s")
-plt.plot(x, n[1], label="b")
-plt.legend()
+plot_hist(("Initial", FlowDistr(flow)), ("Reference", ref))
 
 # %%
 
@@ -403,7 +459,7 @@ for it in iterator:
     x = ref.sample(rng, n)
     x = nn.CoopVec(ArrayXf16(x))
 
-    log_p = flow.log_p(x)
+    log_p = flow.log_eval(x)
     log_p[dr.isnan(log_p)] = 0
     log_p[dr.isinf(log_p)] = 0
     loss_kl = -dr.mean(log_p)
@@ -423,10 +479,7 @@ plt.ylabel("KL loss")
 plt.xlabel("it")
 
 # %%
-x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 1_000_000)))))
-fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
-ax.set_title("flow")
+plot_hist(("Learned", FlowDistr(flow)), ("Reference", ref))
 
 # %%
 x = dr.linspace(Float16, -4, 4, 1_000)
