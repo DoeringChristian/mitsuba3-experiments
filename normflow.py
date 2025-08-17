@@ -7,7 +7,7 @@ import numpy as np
 import drjit as dr
 import drjit.nn as nn
 from drjit.opt import Adam, GradScaler
-from drjit.llvm.ad import (
+from drjit.auto.ad import (
     Texture2f,
     TensorXf,
     TensorXf16,
@@ -19,7 +19,7 @@ from drjit.llvm.ad import (
 )
 import mitsuba as mi
 
-mi.set_variant("llvm_ad_rgb")
+mi.set_variant("cuda_ad_rgb", "llvm_ad_rgb")
 
 # %%
 
@@ -27,7 +27,14 @@ rng = dr.rng(seed=0)
 
 # %%
 
-ref = TensorXf(iio.imread("data/spiral.jpg") / 256)
+ref = iio.imread(
+    "https://rgl.s3.eu-central-1.amazonaws.com/media/uploads/wjakob/2024/06/wave-128.png"
+)
+
+# ref = iio.imread("data/spiral.jpg")
+# ref = iio.imread("data/horizontal.jpg")
+# ref = iio.imread("data/vertical.jpg")
+ref = TensorXf(ref / 256)
 ref = dr.mean(ref, axis=-1)[:, :, None]
 ref = ref / dr.sum(ref, axis=None)
 tex = Texture2f(ref)
@@ -39,23 +46,27 @@ dist_ref = mi.DiscreteDistribution2D(ref_np)
 
 x, _, _ = dist_ref.sample(rng.random(mi.Point2f, (2, 100_000)))
 x = mi.Point2f(x) / mi.Vector2f(ref_np.shape[0], ref_np.shape[1])
+hist_ref, _, _ = np.histogram2d(
+    x[1], x[0], bins=ref_np.shape[0], density=True, range=[[0, 1], [0, 1]]
+)
 
-fig, ax = plt.subplots(1, 2)
-hist, _, _ = np.histogram2d(
-    x.y,
-    x.x,
+x = rng.random(ArrayXf16, (2, 100_000))
+(p,) = tex.eval(x)
+hist_eval, _, _ = np.histogram2d(
+    x[1],
+    x[0],
     bins=ref_np.shape[0],
     density=True,
-    range=[
-        [0, 1],
-        [0, 1],
-    ],
+    weights=p,
+    range=[[0, 1], [0, 1]],
 )
-ax[0].set_title("sampled")
-ax[0].imshow(hist)
-ax[1].set_title("evaluated")
-ax[1].imshow(ref_np)
 
+fig, ax = plt.subplots(1, 2)
+
+ax[0].set_title("sampled")
+ax[0].imshow(hist_ref)
+ax[1].set_title("evaluated")
+ax[1].imshow(hist_eval)
 
 # %% [markdown]
 # Normalizing flows can be used to both sample from a learned distribution, but
@@ -112,8 +123,7 @@ def std_normal_pdf(z: dr.ArrayBase):
 
 
 def log_std_normal_pdf(z: dr.ArrayBase):
-    return dr.log(std_normal_pdf(z))
-    return dr.log(dr.inv_two_pi) + (-0.5 * dr.square(z))
+    return dr.log(dr.inv_two_pi) - 0.5 * dr.square(z)
 
 
 class FlowLayer(nn.Module):
@@ -150,18 +160,18 @@ class CouplingLayer(FlowLayer):
     }
 
     def __init__(
-        self, n_layers: int = 4, width: int = 2, n_activations: int = 32
+        self, n_hidden: int = 2, width: int = 2, n_activations: int = 32
     ) -> None:
         super().__init__()
 
         self.config = (width,)
 
         sequential = []
-        # sequential.append(nn.SinEncode(octaves=16, shift=0.2))
+        sequential.append(nn.TriEncode(1, 0))
         sequential.append(nn.Linear(-1, n_activations))
-        for i in range(n_layers - 2):
+        for i in range(n_hidden):
             sequential.append(nn.Linear(n_activations, n_activations))
-            sequential.append(nn.ReLU())
+            sequential.append(GELU())
         sequential.append(nn.Linear(n_activations, width))
 
         self.net = nn.Sequential(*sequential)
@@ -174,6 +184,7 @@ class CouplingLayer(FlowLayer):
         z: list = list(z)
         d = len(z) // 2
         id, z2 = z[:d], z[d:]
+        print(f"{nn.CoopVec(id)=}")
         p = ArrayXf16(self.net(nn.CoopVec(id)))
         a, mu = p[:d, :], p[d:, :]
         x2 = (z2 - mu) * dr.exp(-a)
@@ -231,7 +242,7 @@ class Flow(nn.Module):
 
         return nn.CoopVec(*z)
 
-    def eval_base_dist_log(self, z: nn.CoopVec) -> dr.ArrayBase:
+    def eval_log_base_dist(self, z: nn.CoopVec) -> dr.ArrayBase:
         return dr.sum([log_std_normal_pdf(z) for z in z])
 
     def log_p(self, x: nn.CoopVec) -> Float16:
@@ -246,7 +257,7 @@ class Flow(nn.Module):
             x, ldj = layer.forward(x)
             log_p += Float32(ldj)
 
-        log_p += self.eval_base_dist_log(x)
+        log_p += self.eval_log_base_dist(x)
         return log_p
 
     def sample(self, sample: nn.CoopVec) -> nn.CoopVec:
@@ -278,12 +289,45 @@ class Flow(nn.Module):
 
 layers = [
     *[CouplingLayer(), PermutationLayer()] * 4,
+    # CouplingLayer(),
+    # PermutationLayer(),
+    # CouplingLayer(),
 ]
 flow = Flow(*layers)
 
 flow: Flow = flow.alloc(TensorXf16, rng=rng)
 
 weights, flow = nn.pack(flow, "training")
+
+# %%
+
+x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 100_000)))))
+hist_sampled, _, _ = np.histogram2d(
+    x[1], x[0], bins=ref_np.shape[0], density=True, range=[[0, 1], [0, 1]]
+)
+
+x = rng.random(ArrayXf16, (2, 100_000))
+log_p = flow.log_p(nn.CoopVec(x))
+p = dr.exp(log_p)
+hist_eval, _, _ = np.histogram2d(
+    x[1],
+    x[0],
+    bins=ref_np.shape[0],
+    density=True,
+    weights=p,
+    range=[[0, 1], [0, 1]],
+)
+
+fig, ax = plt.subplots(1, 3)
+
+ax[0].set_title("sampled")
+ax[0].imshow(hist_sampled)
+ax[1].set_title("evaluated")
+ax[1].imshow(hist_eval)
+ax[2].set_title("ref sampled")
+ax[2].imshow(hist_ref)
+
+# %%
 
 
 x_kl = rng.random(mi.Point2f, (2, 100_000))
@@ -305,7 +349,7 @@ opt = Adam(lr=0.001, params={"weights": Float32(weights)})
 scaler = GradScaler()
 
 batch_size = 2**14
-n = 300
+n = 1_000
 its = []
 losses = []
 d_kls = []
@@ -348,14 +392,14 @@ plt.xlabel("it")
 # %%
 
 x = ArrayXf16(flow.sample(nn.CoopVec(rng.random(ArrayXf16, (2, 100_000)))))
-hist, _, _ = np.histogram2d(
+hist_sampled, _, _ = np.histogram2d(
     x[1], x[0], bins=ref_np.shape[0], density=True, range=[[0, 1], [0, 1]]
 )
 
 x = rng.random(ArrayXf16, (2, 100_000))
 log_p = flow.log_p(nn.CoopVec(x))
 p = dr.exp(log_p)
-hist2, _, _ = np.histogram2d(
+hist_eval, _, _ = np.histogram2d(
     x[1],
     x[0],
     bins=ref_np.shape[0],
@@ -364,9 +408,11 @@ hist2, _, _ = np.histogram2d(
     range=[[0, 1], [0, 1]],
 )
 
-fig, ax = plt.subplots(1, 2)
+fig, ax = plt.subplots(1, 3)
 
 ax[0].set_title("sampled")
-ax[0].imshow(hist)
+ax[0].imshow(hist_sampled)
 ax[1].set_title("evaluated")
-ax[1].imshow(hist2)
+ax[1].imshow(hist_eval)
+ax[2].set_title("ref sampled")
+ax[2].imshow(hist_ref)
