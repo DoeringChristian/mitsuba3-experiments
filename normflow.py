@@ -328,8 +328,8 @@ opt = Adam(lr=0.001, params={"weights": Float32(weights)})
 
 scaler = GradScaler()
 
-batch_size = 128
-n = 100_000
+batch_size = 2**14
+n = 10_000
 its = []
 losses = []
 
