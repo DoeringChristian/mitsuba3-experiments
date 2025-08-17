@@ -7,6 +7,7 @@
 # ## Imports
 # %%
 from pathlib import Path
+from typing import Literal
 import imageio.v3 as iio
 import tqdm
 import matplotlib.pyplot as plt
@@ -171,7 +172,8 @@ ref = SpiralDistr()
 
 def plot_hist(*distrs: tuple[str, Distr2D]):
     """
-    Plots the histograms of distributions with their names
+    Plots the histograms of distributions with their names, given by a list of
+    tuples.
     """
     n = len(distrs)
     n_bins = 256
@@ -188,38 +190,35 @@ def plot_hist(*distrs: tuple[str, Distr2D]):
 plot_hist(("Reference", ref))
 
 # %% [markdown]
-# Normalizing flows can be used to both sample from a learned distribution, but
-# also evaluate the probability density function for a given sample. This makes
-# them very useful in computer graphics, where both properties are often
-# required.
-#
-# A normalizing flow is represented by an invertible function $f_\theta$. To
-# sample random variables $X$ from the learned distribution, we sample latent
-# variables $Z$ from a normal gaussian distribution $Z \sim p_Z = N(0, 1)$, and
-# apply the inverse flow $X = f^{-1}_\theta(Z)$.
-#
-# We parameterize the normalizing flows with coupling and permutation layers
-# $f_{i;\theta}$, such that $X = f_{0;\theta} \circ f_{1;\theta} \circ \dots
-# f_{D;\theta} (Z)$. To train the network, we maximize the log sum of the
-# estimated probability of sampling the sample i.e. $max \sum \text{log}
-# p_{X;\theta}(X_i)$. To compute this probability, we can sum over the log
-# determinant of the layers, $p_{X;\theta}(X) = \text{log} \left\vert \text{det} {\partial z
-# \over \partial x} \right\vert_{\theta} + \text{log} p_{Z}(Z)$.
+# In this tutorial, we use the Gaussian Error Linear Unit activation function,
+# which is not yet defined in Dr.Jit's neural network module. Therefore, we
+# define this activation function here. It can either use the tanh
+# approximation, or use the builtin erf function.
 
 # %%
 
 
 class GELU(nn.Module):
-    r""" """
+    r"""
+    Gaussian Error Linear Unit activation function, with and without tanh
+    approximation.
+    """
 
-    DRJIT_STRUCT = {}
+    DRJIT_STRUCT = {"approx": str}
+
+    def __init__(self, approx: Literal["none", "tanh"] = "none") -> None:
+        super().__init__()
+        self.approx = approx
 
     def __call__(self, arg: nn.CoopVec, /) -> nn.CoopVec:
-        return (
-            0.5
-            * arg
-            * (1 + dr.tanh(dr.sqrt(2 / dr.pi) * (arg + 0.044715 * arg * arg * arg)))
-        )
+        if self.approx == "tanh":
+            return (
+                0.5
+                * arg
+                * (1 + dr.tanh(dr.sqrt(2 / dr.pi) * (arg + 0.044715 * arg * arg * arg)))
+            )
+        elif self.approx == "none":
+            return x * (1 + dr.erf(x))
 
 
 x = dr.linspace(Float32, -5, 5, 1000)
@@ -246,6 +245,25 @@ class TwoAlign(nn.Module):
             arg.append(tp(0))
         return nn.CoopVec(*arg)
 
+
+# %% [markdown]
+# Normalizing flows can be used to both sample from a learned distribution, but
+# also evaluate the probability density function for a given sample. This makes
+# them very useful in computer graphics, where both properties are often
+# required.
+#
+# A normalizing flow is represented by an invertible function $f_\theta$. To
+# sample random variables $X$ from the learned distribution, we sample latent
+# variables $Z$ from a normal gaussian distribution $Z \sim p_Z = N(0, 1)$, and
+# apply the inverse flow $X = f^{-1}_\theta(Z)$.
+#
+# We parameterize the normalizing flows with coupling and permutation layers
+# $f_{i;\theta}$, such that $X = f_{0;\theta} \circ f_{1;\theta} \circ \dots
+# f_{D;\theta} (Z)$. To train the network, we maximize the log sum of the
+# estimated probability of sampling the sample i.e. $max \sum \text{log}
+# p_{X;\theta}(X_i)$. To compute this probability, we can sum over the log
+# determinant of the layers, $p_{X;\theta}(X) = \text{log} \left\vert \text{det} {\partial z
+# \over \partial x} \right\vert_{\theta} + \text{log} p_{Z}(Z)$.
 
 # %%
 
