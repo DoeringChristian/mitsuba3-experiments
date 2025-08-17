@@ -1,4 +1,12 @@
+# %% [markdown]
+# # Normalizing Flows
+# In this tutorial, we will implement normalizing flows using the Dr.Jit
+# compiler.
+
+# %% [markdown]
+# ## Imports
 # %%
+from pathlib import Path
 import imageio.v3 as iio
 import tqdm
 import matplotlib.pyplot as plt
@@ -17,18 +25,31 @@ from drjit.auto.ad import (
     Array2f,
     Array3f,
 )
-import mitsuba as mi
 
-mi.set_variant("cuda_ad_rgb", "llvm_ad_rgb")
+# %% [markdown]
+# First we initialize a random number generator, which will be used as the
+# source of randomness in this tutorial, ensuring that variables remain
+# uncorrelated.
 
 # %%
 
 rng = dr.rng(seed=0)
 
+# %% [markdown]
+# We use a standard normal distribution for the base distribution of the flow
+# model. Since our random number generator produces uniformly distributed
+# values, we define this function to warp them into gaussian distributed
+# values. The flow model also requires us to evaluate the logarithm of this
+# distribution, and we therefore also define this function.
+
 # %%
 
 
 def square_to_std_normal(sample: Array2f):
+    """
+    This function takes a sample from a uniform square distribution, and
+    transforms it into a sample from a standard normal distribution.
+    """
     r = dr.sqrt(-2.0 * dr.log(1.0 - sample[0]))
     phi = 2.0 * dr.pi * sample[1]
 
@@ -45,7 +66,14 @@ def log_std_normal_pdf(z: dr.ArrayBase):
 
 class SpiralDistr:
     def __init__(self) -> None: ...
-    def sample(self, sample1: Float32, sample2: Array2f):
+    def sample(
+        self,
+        rng: dr.random.Generator,
+        n: int,
+    ):
+        sample1 = rng.random(Float32, n)
+        sample2 = rng.random(Array2f, (2, n))
+
         sample1 = sample1 * 2 - 1
         t = dr.sqrt(dr.abs(sample1))
         r = t * 4 * dr.sign(sample1)
@@ -58,6 +86,43 @@ class SpiralDistr:
         return x + y
 
 
+# %%
+
+
+class ImageDistr:
+    def __init__(
+        self,
+        uri: str = "data/albert.jpg",
+    ) -> None:
+        import mitsuba as mi
+
+        mi.set_variant("cuda_ad_rgb")
+
+        self.mi = mi
+
+        img = iio.imread(uri)
+        if len(img.shape) == 3:
+            img = img.mean(-1)
+        img = img / img.sum(None)
+        self.shape = img.shape
+
+        distr = mi.DiscreteDistribution2D(img)
+        self.distr = distr
+
+    def sample(
+        self,
+        rng: dr.random.Generator,
+        n: int,
+    ):
+        mi = self.mi
+        x, _, _ = self.distr.sample(rng.random(mi.Point2f, (2, n)))
+        m = max(self.shape[0], self.shape[1])
+        x = mi.Point2f(x) / mi.Vector2f(m)
+        x = mi.Point2f(x.x, 1.0 - x.y)
+        return x * 8 - 4
+
+
+# ref = ImageDistr()
 ref = SpiralDistr()
 
 # %%
@@ -65,9 +130,7 @@ ref = SpiralDistr()
 n_bins = 256
 hist_range = [[-5, 5], [-5, 5]]
 
-sample1 = rng.random(Float32, 100_000)
-sample2 = rng.random(Array2f, (2, 100_000))
-x = ref.sample(sample1, sample2)
+x = ref.sample(rng, 1_000_000)
 fig, ax = plt.subplots(1, 1, figsize=(6, 6))
 ax.hist2d(x[0], x[1], bins=n_bins, range=hist_range)
 ax.set_title("sampled")
@@ -337,9 +400,7 @@ iterator = tqdm.tqdm(range(n))
 for it in iterator:
     weights[:] = Float16(opt["weights"])
 
-    sample1 = rng.random(Float32, batch_size)
-    sample2 = rng.random(Array2f, (2, batch_size))
-    x = ref.sample(sample1, sample2)
+    x = ref.sample(rng, n)
     x = nn.CoopVec(ArrayXf16(x))
 
     log_p = flow.log_p(x)
