@@ -171,7 +171,7 @@ class CouplingLayer(FlowLayer):
         sequential.append(nn.Linear(-1, n_activations))
         for i in range(n_hidden):
             sequential.append(nn.Linear(n_activations, n_activations))
-            sequential.append(GELU())
+            sequential.append(nn.ReLU())
         sequential.append(nn.Linear(n_activations, width))
 
         self.net = nn.Sequential(*sequential)
@@ -327,20 +327,6 @@ ax[1].imshow(hist_eval)
 ax[2].set_title("ref sampled")
 ax[2].imshow(hist_ref)
 
-# %%
-
-
-x_kl = rng.random(mi.Point2f, (2, 100_000))
-
-
-def kl_divergence(flow):
-    p = tex.eval(x_kl)[0]
-    q = dr.exp(Float32(flow.log_p(nn.CoopVec(ArrayXf16(x_kl)))))
-
-    d_kl = p * dr.log(p / q + 1e-5)
-    d_kl[p == 0] = 0
-    return dr.mean(d_kl, axis=None).numpy().item()
-
 
 # %%
 
@@ -348,11 +334,10 @@ opt = Adam(lr=0.001, params={"weights": Float32(weights)})
 
 scaler = GradScaler()
 
-batch_size = 2**14
+batch_size = 2**20
 n = 1_000
 its = []
 losses = []
-d_kls = []
 
 iterator = tqdm.tqdm(range(n))
 for it in iterator:
@@ -373,20 +358,12 @@ for it in iterator:
     if (it + 1) % 10 == 0:
         loss = loss_kl.numpy().item()
         losses.append(loss)
-        d_kl = kl_divergence(flow)
-        d_kls.append(d_kl)
         its.append(it)
-        iterator.set_postfix({"loss_kl": loss, "d_kl": d_kl})
+        iterator.set_postfix({"loss_kl": loss})
 
 # %%
-
 plt.plot(its, losses)
 plt.ylabel("KL loss")
-plt.xlabel("it")
-
-# %%
-plt.plot(its, d_kls)
-plt.ylabel("KL divergence")
 plt.xlabel("it")
 
 # %%
