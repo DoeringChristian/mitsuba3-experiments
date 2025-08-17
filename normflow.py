@@ -219,11 +219,13 @@ class GELU(nn.Module):
                 * (1 + dr.tanh(dr.sqrt(2 / dr.pi) * (arg + 0.044715 * arg * arg * arg)))
             )
         elif self.approx == "none":
-            return x * (1 + dr.erf(x))
+            x = ArrayXf16(arg)
+            y = x * (1 + dr.erf(x))
+            return nn.CoopVec(y)
 
 
 x = dr.linspace(Float32, -5, 5, 1000)
-y = GELU()(x)
+y = ArrayXf16(GELU("tanh")(x))
 plt.plot(x, y)
 
 # %% [markdown]
