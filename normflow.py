@@ -190,6 +190,7 @@ def plot_hist(*distrs: tuple[str, Distr2D]):
 plot_hist(("Reference", ref))
 
 # %% [markdown]
+# ## Activations
 # In this tutorial, we use the Gaussian Error Linear Unit activation function,
 # which is not yet defined in Dr.Jit's neural network module. Therefore, we
 # define this activation function here. It can either use the tanh
@@ -255,24 +256,38 @@ class TwoAlign(nn.Module):
 
 # %% [markdown]
 # ## Normalizing Flows
+
+# Normalizing flows are a powerful tool, which allows us to learn a probability
+# distribution, and generate new samples from it, but also evaluate the learned
+# distribution at any position. This makes them very useful in computer
+# graphics, where both properties are often required.
+# For example, to render a scene with neural BRDFs, we want to generate samples
+# from its PDF, as well as evaluate it for multiple importance sampling.
 #
-# Normalizing flows can be used to both sample from a learned distribution, but
-# also evaluate the probability density function for a given sample. This makes
-# them very useful in computer graphics, where both properties are often
-# required.
+# A normalizing flow is represented by an invertible function $f_\theta$, and
+# an initial distribution $p_Z$. To sample random variables $X$ from the
+# learned distribution, we sample latent variables $Z$ the initial
+# distribution $Z \sim p_Z = N(0, 1)$, and apply the inverse flow $X =
+# f^{-1}_\theta(Z)$. We can also compute the probability of sampling $X$ by
+# applying the change of variables formula $ p_X(X) = \left\vert \text{det} {\partial z
+# \over \partial x} \right\vert_{\theta} \cdot p_{Z}(Z)$.
+# The bijective function $f$ is usually split into multiple layers $f_i$ which
+# are applied consecutively to the initial variable $Z$, such that $X =
+# f^{-1}_{0;\theta} \circ f^{-1}_{1;\theta} \circ \dots f^{-1}_{D;\theta} (Z)$.
+# To train the network, we maximize the log probability of sampling $X$, taken
+# from the reference distribution $\widehat{p_X}$ i.e. $\max \sum \log
+# p_{X;\theta}(X_i)$. This can be computed by summing over the log determinant
+# of the jacobian of each layer $\log p_{X;\theta}(X) = \log \left\vert
+# \text{det} {\partial z \over \partial x} \right\vert_{\theta} + \log
+# p_{Z}(Z)$.
 #
-# A normalizing flow is represented by an invertible function $f_\theta$. To
-# sample random variables $X$ from the learned distribution, we sample latent
-# variables $Z$ from a normal gaussian distribution $Z \sim p_Z = N(0, 1)$, and
-# apply the inverse flow $X = f^{-1}_\theta(Z)$.
-#
-# We parameterize the normalizing flows with coupling and permutation layers
-# $f_{i;\theta}$, such that $X = f_{0;\theta} \circ f_{1;\theta} \circ \dots
-# f_{D;\theta} (Z)$. To train the network, we maximize the log sum of the
-# estimated probability of sampling the sample i.e. $max \sum \text{log}
-# p_{X;\theta}(X_i)$. To compute this probability, we can sum over the log
-# determinant of the layers, $p_{X;\theta}(X) = \text{log} \left\vert \text{det} {\partial z
-# \over \partial x} \right\vert_{\theta} + \text{log} p_{Z}(Z)$.
+# We use both coupling and permutation layers to compose $f$.
+# Coupling layers apply affine transformations to the second dimension of the
+# input, which are dependent on the first component via a neural network. The
+# first component is left unchanged. This guarantees, that the function is
+# invertible. To ensure sufficient mixing between the two components, we flip
+# the two components, and apply multiple coupling layers. This is done using
+# the permutation layer.
 
 # %%
 
@@ -372,6 +387,9 @@ class CouplingLayer(FlowLayer):
         result.net = net
 
         return result, size
+
+
+# %%
 
 
 class Flow(nn.Module):
