@@ -225,6 +225,13 @@ x = dr.linspace(Float32, -5, 5, 1000)
 y = GELU()(x)
 plt.plot(x, y)
 
+# %% [markdown]
+# Dr.Jit does not support neural networks on CUDA, with a single dimensional
+# input. Later on, we will see, that the network, used in a 2D coupling layer
+# has a single-dimensional input. We therefore, introduce a `TwoAlign` layer,
+# that simply ensures that its output dimension is divisible by two, making our
+# implementation compatible with CUDA.
+
 # %%
 
 
@@ -247,6 +254,8 @@ class TwoAlign(nn.Module):
 
 
 # %% [markdown]
+# ## Normalizing Flows
+#
 # Normalizing flows can be used to both sample from a learned distribution, but
 # also evaluate the probability density function for a given sample. This makes
 # them very useful in computer graphics, where both properties are often
