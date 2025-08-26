@@ -822,7 +822,7 @@ for it in iterator:
 #
 # The loss curve shows the negative log-likelihood, which relates to the KL divergence:
 #
-# $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^N \log p_{X;\theta}(x_i) = D_{KL}(\hat{p}_X \| p_{X;\theta}) - H(\hat{p}_X)$$
+# $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^N \log p_{X;\theta}(x_i) = D_{KL}(\hat{p}_X \| p_{X;\theta}) + H(\hat{p}_X)$$
 #
 # where $H(\hat{p}_X)$ is the entropy of the reference distribution (constant).
 #
