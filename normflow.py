@@ -93,7 +93,7 @@ def log_std_normal_pdf(z: dr.ArrayBase):
 
     For a d-dimensional standard normal: log p(z) = -d/2 * log(2π) - 1/2 * ||z||²
     """
-    return -dr.log(dr.two_pi) - 0.5 * dr.square(z)
+    return -dr.log(dr.sqrt(dr.two_pi)) - 0.5 * dr.square(z)
 
 
 # %% [markdown]
