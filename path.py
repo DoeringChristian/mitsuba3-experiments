@@ -296,7 +296,7 @@ class Path(mi.SamplingIntegrator):
             # ----------------------- Depth Update ------------------------
             depth[active] += 1
 
-            active &= depth < max_depth
+            active &= depth < self.max_depth
             active &= si.is_valid()
 
         return L, (depth != 0), []
