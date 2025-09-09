@@ -268,7 +268,7 @@ class Path(mi.SamplingIntegrator):
             fmax = dr.max(f)
 
             rr_prob = dr.minimum(fmax * dr.square(eta), 0.95)
-            rr_active = depth >= rr_depth
+            rr_active = depth >= self.rr_depth
             rr_continue = sampler.next_1d() < rr_prob
 
             f[rr_active] *= dr.rcp(dr.detach(rr_prob))
