@@ -63,13 +63,15 @@ class Field:
         self.scene = scene
         self.sh_order = sh_order
 
-        self.pos_enc = nn.PermutoEncoding(Float16, dimension=3)
+        self.pos_enc = nn.HashGridEncoding(Float16, dimension=3)
 
         sequential = []
         sequential.append(nn.Cast(Float16))
         sequential.append(
             nn.Linear(
-                self.pos_enc.out_features + (sh_order + 1) ** 2 + 6, width, bias=bias
+                self.pos_enc.n_output_features + (sh_order + 1) ** 2 + 6,
+                width,
+                bias=bias,
             )
         )
         sequential.append(nn.LeakyReLU())
@@ -95,9 +97,10 @@ class Field:
 
         p_enc = self.pos_enc(p_norm)
 
-        wi_enc = dr.sh_eval(si.wi, self.sh_order)
+        wi = si.to_world(si.wi)
+        wi_enc = dr.sh_eval(wi, self.sh_order)
 
-        features = nn.CoopVec(p_norm, p_enc, si.wi, wi_enc)
+        features = nn.CoopVec(p_norm, p_enc, wi, wi_enc)
         result = mi.Color3f(*self.sequential(features))
 
         return result
