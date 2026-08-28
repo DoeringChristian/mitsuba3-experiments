@@ -2,7 +2,7 @@
 # - bear
 
 
-[project]
+[workspace]
 authors = ["Christian Döring <christian.doering@tum.de>"]
 channels = ["conda-forge"]
 description = "Add a short description here"
@@ -14,6 +14,7 @@ version = "0.1.0"
 cuda = "12.4"
 
 [tasks]
+build-mitsuba = "cmake -S mitsuba3 -B mitsuba3/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build mitsuba3/build"
 
 [dependencies]
 cmake = "3.28.*"
@@ -55,7 +56,7 @@ libegl = ">=1.7.0,<2"
 libegl-devel = ">=1.7.0,<2"
 
 [target.linux-64.activation]
-scripts = ["mitsuba3/build-mitsuba/setpath.sh"]
+scripts = ["mitsuba3/build/setpath.sh"]
 
 [target.linux-64.activation.env]
 CMAKE_CXX_COMPILER_LAUNCHER = "ccache"
