@@ -2,74 +2,24 @@ import mitsuba as mi
 import drjit as dr
 from tqdm import tqdm
 from drjitstruct import drjitstruct
+import os
 
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
 
 
-def RTXDI_Partial(
-    receiver_pos: mi.Vector3f, sample_pos: mi.Vector3f, sample_normal: mi.Vector3f
-) -> tuple[mi.Float, mi.Float]:
-    vec = receiver_pos - sample_pos
-
-    distance_to_surface = dr.norm(vec)
-    cosine_emission_angle = dr.clamp(
-        dr.dot(sample_normal, vec / distance_to_surface), 0, 1
-    )
-
-    return distance_to_surface, cosine_emission_angle
-
-
-def RTXDI_J(
-    receiver_pos: mi.Vector3f,
-    neighbor_pos: mi.Vector3f,
-    neighbor_res: "RestirReservoir",
-) -> mi.Float:
-    new_distance, new_cosine = RTXDI_Partial(
-        receiver_pos, neighbor_res.z.x_s, neighbor_res.z.n_s
-    )
-    original_distance, original_cosine = RTXDI_Partial(
-        neighbor_pos, neighbor_res.z.x_s, neighbor_res.z.n_s
-    )
-
-    jacobian = (new_cosine * original_distance * original_distance) / (
-        original_cosine * new_distance * new_distance
-    )
-    jacobian = dr.select(dr.isinf(jacobian) | dr.isnan(jacobian), 0, jacobian)
-    return jacobian
-
-
-def J(receiver_pos: mi.Vector3f, neighbor_res: mi.Vector3f) -> mi.Float:
+def J(receiver_pos: mi.Vector3f, neighbor_res: "RestirReservoir") -> mi.Float:
     v_new = receiver_pos - neighbor_res.z.x_s
     d_new = dr.norm(v_new)
-    cos_new = dr.clamp(dr.dot(v_new, neighbor_res.z.n_s) / d_new, 0, 1)
+    cos_new = dr.clip(dr.dot(v_new, neighbor_res.z.n_s) / d_new, 0, 1)
 
     v_old = neighbor_res.z.x_v - neighbor_res.z.x_s
     d_old = dr.norm(v_old)
-    cos_old = dr.clamp(dr.dot(v_old, neighbor_res.z.n_s) / d_old, 0, 1)
+    cos_old = dr.clip(dr.dot(v_old, neighbor_res.z.n_s) / d_old, 0, 1)
 
-    div = cos_old * dr.sqr(d_new)
-    jacobian = dr.select(div > 0, cos_new * dr.sqr(d_old) / div, 0)
+    div = cos_old * dr.square(d_new)
+    jacobian = dr.select(div > 0, cos_new * dr.square(d_old) / div, 0)
     return jacobian
-
-
-def J_rcp(q: "RestirSample", r: "RestirSample") -> mi.Float:
-    """
-    Calculate the Reciprocal of the absolute of the Jacobian determinant.
-    J_rcp = |J_{q\\rightarrow r}|^{-1} // Equation 11 from paper
-    """
-    w_qq = q.x_v - q.x_s
-    w_qq_len = dr.norm(w_qq)
-    w_qq /= w_qq_len
-    cos_psi_q = dr.clamp(dr.dot(w_qq, q.n_s), 0, 1)
-
-    w_qr = r.x_v - q.x_s
-    w_qr_len = dr.norm(w_qr)
-    w_qr /= w_qr_len
-    cos_psi_r = dr.clamp(dr.dot(w_qr, q.n_s), 0, 1)
-
-    div = dr.abs(cos_psi_r) * dr.sqr(w_qq_len)
-    return dr.select(div > 0, dr.abs(cos_psi_q) * dr.sqr(w_qr_len) / div, 0.0)
 
 
 def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
@@ -77,7 +27,7 @@ def mis_weight(pdf_a: mi.Float, pdf_b: mi.Float) -> mi.Float:
     Compute the Multiple Importance Sampling (MIS) weight given the densities
     of two sampling strategies according to the power heuristic.
     """
-    a2 = dr.sqr(pdf_a)
+    a2 = dr.square(pdf_a)
     return dr.detach(dr.select(pdf_a > 0, a2 / dr.fma(pdf_b, pdf_b, a2), 0), True)
 
 
@@ -168,7 +118,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         self.film_size: None | mi.Vector2u = None
 
     def to_idx(self, pos: mi.Vector2u) -> mi.UInt:
-        pos = dr.clamp(mi.Point2u(pos), mi.Point2u(0), self.film_size)
+        pos = dr.clip(mi.Point2u(pos), mi.Point2u(0), self.film_size - 1)
         assert self.film_size is not None
         return (pos.y * self.film_size.x + pos.x) * self.spp + self.sample_offset
 
@@ -244,7 +194,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
         aovs = [res.x, res.y, res.z, mi.Float(1)]
 
-        block.put(pos, aovs)
+        block.put(mi.Point2f(pos) + 0.5, aovs)
 
         film.put_block(block)
 
@@ -290,11 +240,19 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
         Z = mi.UInt(0)
 
+        R = self.temporal_reservoir
+        Rnew.merge(sampler, R, p_hat(R.z.L_o))
+        Z += R.M
+
         if self.spatial_spatial_reuse:
             Rnew.merge(sampler, Rs, p_hat(Rs.z.L_o))
             Z += Rs.M
 
-        max_iter = dr.select(Rs.M < self.max_M_spatial / 2, 9, 3)
+        max_iter = (
+            dr.select(Rs.M < self.max_M_spatial / 2, 9, 3)
+            if self.max_M_spatial is not None
+            else mi.UInt(9)
+        )
 
         any_reused = dr.full(mi.Bool, False, len(pos.x))
 
@@ -304,7 +262,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
             offset = (
                 mi.warp.square_to_uniform_disk(sampler.next_2d()) * self.search_radius
             )
-            p = dr.clamp(pos + mi.Vector2i(offset), mi.Point2u(0), self.film_size)
+            p = dr.clip(pos + mi.Vector2i(offset), mi.Point2u(0), self.film_size)
 
             qn: RestirSample = dr.gather(RestirSample, self.sample, self.to_idx(p))
 
@@ -323,7 +281,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
                 ~active | shadowed,
                 0,
                 p_hat(Rn.z.L_o)
-                * (dr.clamp(J(q.x_v, Rn), 0, 1000) if self.jacobian else 1.0),
+                * (dr.clip(J(q.x_v, Rn), 0, 1000) if self.jacobian else 1.0),
             )  # l.11 - 13
 
             Rnew.merge(sampler, Rn, phat, active)
@@ -427,8 +385,8 @@ class RestirIntegrator(mi.SamplingIntegrator):
         emitter: mi.Emitter = ds.emitter
         self.emittance = emitter.eval(si)
 
-        S.x_v = si.p
-        S.n_v = si.n
+        S.x_v = mi.Vector3f(si.p)
+        S.n_v = mi.Vector3f(si.n)
         S.valid = si.is_valid()
         self.si_v = si
 
@@ -451,11 +409,12 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
         si: mi.SurfaceInteraction3f = scene.ray_intersect(ray)
 
-        S.x_s = si.p
-        S.n_s = si.n
+        S.x_s = mi.Vector3f(si.p)
+        S.n_s = mi.Vector3f(si.n)
 
         self.sample = S
 
+    @dr.syntax
     def sample_ray(
         self,
         scene: mi.Scene,
@@ -480,26 +439,7 @@ class RestirIntegrator(mi.SamplingIntegrator):
         prev_bsdf_delta = mi.Bool(True)
         bsdf_ctx = mi.BSDFContext()
 
-        loop = mi.Loop(
-            "Path Tracer",
-            state=lambda: (
-                sampler,
-                ray,
-                throughput,
-                result,
-                eta,
-                depth,
-                valid_ray,
-                prev_si,
-                prev_bsdf_pdf,
-                prev_bsdf_delta,
-                active,
-            ),
-        )
-
-        loop.set_max_iterations(self.max_depth)
-
-        while loop(active):
+        while dr.hint(active, max_iterations=self.max_depth, label="Path Tracer"):
             # TODO: not necesarry in first interaction
             si = scene.ray_intersect(ray)
 
@@ -575,14 +515,14 @@ class RestirIntegrator(mi.SamplingIntegrator):
 
             throughput_max = dr.max(throughput)
 
-            rr_prop = dr.minimum(throughput_max * dr.sqr(eta), 0.95)
+            rr_prop = dr.minimum(throughput_max * dr.square(eta), 0.95)
             rr_active = depth >= self.rr_depth
             rr_continue = sampler.next_1d() < rr_prop
 
             throughput[rr_active] *= dr.rcp(rr_prop)
 
             active = (
-                active_next & (~rr_active | rr_continue) & (dr.neq(throughput_max, 0.0))
+                active_next & (~rr_active | rr_continue) & ((throughput_max != 0.0))
             )
 
         return dr.select(valid_ray, result, 0.0)
@@ -591,7 +531,11 @@ class RestirIntegrator(mi.SamplingIntegrator):
 mi.register_integrator("restirgi", lambda props: RestirIntegrator(props))
 
 if __name__ == "__main__":
+    OUT = "out/restirgi"
+    os.makedirs(OUT)
+
     with dr.suspend_grad():
+
         scene = mi.cornell_box()
         scene["sensor"]["film"]["width"] = 1024
         scene["sensor"]["film"]["height"] = 1024
@@ -605,12 +549,12 @@ if __name__ == "__main__":
 
         print("Rendering Reference Image:")
         ref = mi.render(scene, spp=256)
-        mi.util.write_bitmap("out/ref.jpg", ref)
+        mi.util.write_bitmap(f"{OUT}/ref.exr", ref)
 
         integrator: RestirIntegrator = mi.load_dict(
             {
                 "type": "restirgi",
-                "jacobian": False,
+                "jacobian": True,
                 "bias_correction": False,
                 "bsdf_sampling": True,
                 "max_M_spatial": 500,
@@ -623,4 +567,4 @@ if __name__ == "__main__":
         for i in tqdm(range(200)):
             img = mi.render(scene, integrator=integrator, seed=i, spp=1)
 
-            mi.util.write_bitmap(f"out/{i}.jpg", img)
+            mi.util.write_bitmap(f"{OUT}/{i}.exr", img)
