@@ -4,6 +4,7 @@ import drjit as dr
 
 from tqdm import tqdm
 import os
+import math
 from dataclasses import dataclass
 
 if __name__ == "__main__":
@@ -108,7 +109,6 @@ class RestirPTIntegrator(ADIntegrator):
         self.spatial_rounds = props.get("spatial_rounds", 9)
         self.max_jacobian = props.get("max_jacobian", 3.0)
         self.min_reconnect_distance = props.get("min_reconnect_distance", 0.05)
-        self.jitter = props.get("jitter", False)
         self.n = mi.UInt(0)
         self.film_size: None | mi.ScalarVector2u = None
 
@@ -130,10 +130,37 @@ class RestirPTIntegrator(ADIntegrator):
         self.prev_sensor: mi.Sensor = mi.load_dict({"type": "perspective"})
         mi.traverse(self.prev_sensor).update(mi.traverse(sensor))
 
+    def prepare_frame(self, scene: mi.Scene, prev_sensor: int | mi.Sensor = 0):
+        if isinstance(prev_sensor, int):
+            prev_sensor = scene.sensors()[prev_sensor]
+
+        mi.traverse(self.prev_sensor).update(mi.traverse(prev_sensor))
+
     def to_idx(self, pos: mi.Point2u) -> mi.UInt:
         assert self.film_size is not None
+
+        n_samples = self.film_size.x * self.film_size.y * self.spp
+        sample_offset = dr.arange(mi.UInt, n_samples) % self.spp
+
         pos = dr.clip(mi.Point2u(pos), mi.Point2u(0), self.film_size - 1)
-        return (pos.y * self.film_size.x + pos.x) * self.spp + self.sample_offset
+        return (pos.y * self.film_size.x + pos.x) * self.spp + sample_offset
+
+    def sample_prev(self, sample: RestirSample) -> tuple[RestirSample, mi.Bool]:
+        """Project the current sample into the previous sensors image space,
+        and lookup the corresponding pixel wise sample.
+        """
+
+        si_v: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
+        si_v.p = sample.x_v
+        ds, _ = self.prev_sensor.sample_direction(si_v, mi.Point2f(0.0))
+
+        valid = ds.pdf > 0
+
+        Sprev: RestirSample = dr.gather(
+            RestirSample, self.prev_sample, self.to_idx(mi.Point2u(ds.uv)), valid
+        )
+
+        return Sprev, valid
 
     def similar(self, s1: RestirSample, s2: RestirSample) -> mi.Bool:
         dist = dr.norm(s1.x_v - s2.x_v)
@@ -181,9 +208,21 @@ class RestirPTIntegrator(ADIntegrator):
             sensor = scene.sensors()[sensor]
 
         film = sensor.film()
+        film_size = film.crop_size()
 
         if film.sample_border():
             raise Exception("sample_border=True is not supported by this integrator")
+
+        if self.film_size is None:
+            raise Exception("call init(scene, sensor, spp) before rendering")
+
+        if (self.film_size.x, self.film_size.y) != (film_size.x, film_size.y) or (
+            self.spp != spp
+        ):
+            raise Exception(
+                f"initialized for {self.film_size} at {self.spp} spp, but "
+                f"rendering {film_size} at {spp} spp; call init() again"
+            )
 
         with dr.suspend_grad():
             sampler, spp = self.prepare(
@@ -192,42 +231,20 @@ class RestirPTIntegrator(ADIntegrator):
 
             ray, weight, pos = self.sample_rays(scene, sensor, sampler)
 
-            if not self.jitter:
-                scale = dr.rcp(mi.ScalarVector2f(film.crop_size()))
-                offset = -mi.ScalarVector2f(film.crop_offset()) * scale
-                pos = dr.floor(pos) + 0.5
-                ray, weight = sensor.sample_ray_differential(
-                    time=sensor.shutter_open(),
-                    sample1=0.0,
-                    sample2=dr.fma(pos, scale, offset),
-                    sample3=mi.Point2f(0.5),
-                )
-
-            film_size = film.crop_size()
-            if self.film_size is None:
-                raise Exception("call init(scene, sensor, spp) before rendering")
-
-            if (self.film_size.x, self.film_size.y) != (film_size.x, film_size.y) or (
-                self.spp != spp
-            ):
-                raise Exception(
-                    f"initialized for {self.film_size} at {self.spp} spp, but "
-                    f"rendering {film_size} at {spp} spp; call init() again"
-                )
-
-            self.sample_offset = dr.arange(mi.UInt, dr.width(ray.o)) % spp
-            self.pos = mi.Point2u(pos)
-
             sample, si, Le_dir, specular, weight_v = self.sample_initial(
                 scene, sampler, ray
             )
             dr.eval(sample)
 
-            temporal = self.temporal_resampling(scene, sampler, sample, si, specular)
-            dr.eval(temporal)
+            prev, prev_valid = self.sample_prev(sample)
+
+            reservoir = self.temporal_resampling(
+                scene, sampler, sample, si, specular, prev, prev_valid
+            )
+            dr.eval(reservoir)
 
             self.reservoir = self.spatial_resampling(
-                scene, sampler, sample, si, temporal
+                scene, sampler, sample, si, pos, reservoir
             )
             dr.eval(self.reservoir, self.search_radius)
 
@@ -250,7 +267,6 @@ class RestirPTIntegrator(ADIntegrator):
             film.put_block(block)
 
             self.n += 1
-            mi.traverse(self.prev_sensor).update(mi.traverse(sensor))
             self.prev_sample = sample
 
             return film.develop()
@@ -282,6 +298,7 @@ class RestirPTIntegrator(ADIntegrator):
         sampler: mi.Sampler,
         sample: RestirSample,
         si: mi.SurfaceInteraction3f,
+        pos: mi.Vector2f,
         temporal: RestirReservoir,
     ) -> RestirReservoir:
         Rs = self.reservoir
@@ -289,7 +306,6 @@ class RestirPTIntegrator(ADIntegrator):
         Rnew: RestirReservoir = dr.zeros(RestirReservoir)
         Q = dr.alloc_local(Reuse, self.spatial_rounds, value=dr.zeros(Reuse))
 
-        pos = self.pos
         q: RestirSample = sample
 
         R = temporal
@@ -394,18 +410,10 @@ class RestirPTIntegrator(ADIntegrator):
         sample: RestirSample,
         si: mi.SurfaceInteraction3f,
         specular: mi.Bool,
+        prev: RestirSample,
+        prev_valid: mi.Bool,
     ) -> RestirReservoir:
-        si_v: mi.SurfaceInteraction3f = dr.zeros(mi.SurfaceInteraction3f)
-        si_v.p = sample.x_v
-        ds, _ = self.prev_sensor.sample_direction(si_v, mi.Point2f(0.0))
-
-        valid = ds.pdf > 0
-
-        Sprev: RestirSample = dr.gather(
-            RestirSample, self.prev_sample, self.to_idx(mi.Point2u(ds.uv)), valid
-        )
-
-        valid &= self.similar(sample, Sprev)
+        valid = prev_valid & self.similar(sample, prev)
 
         R = dr.select(valid, self.reservoir, dr.zeros(RestirReservoir))
 
@@ -605,13 +613,20 @@ mi.register_integrator("restirpt", lambda props: RestirPTIntegrator(props))
 
 if __name__ == "__main__":
     OUT = "out/restirpt"
+    RES = 1024
+    FRAMES = 200
     os.makedirs(OUT, exist_ok=True)
+
+    def camera(t: float) -> mi.ScalarTransform4f:
+        angle = 0.25 * math.sin(2.0 * math.pi * t)
+        return mi.ScalarTransform4f().look_at(
+            origin=[3.9 * math.sin(angle), 0.0, 3.9 * math.cos(angle)],
+            target=[0.0, 0.0, 0.0],
+            up=[0.0, 1.0, 0.0],
+        )
 
     with dr.suspend_grad():
         scene = mi.cornell_box()
-        scene["sensor"]["film"]["width"] = 1024
-        scene["sensor"]["film"]["height"] = 1024
-        scene["sensor"]["film"]["rfilter"] = mi.load_dict({"type": "box"})
         del scene["small-box"]
         scene["glass-sphere"] = {
             "type": "sphere",
@@ -621,9 +636,24 @@ if __name__ == "__main__":
         }
         scene: mi.Scene = mi.load_dict(scene)
 
+        sensor: mi.Sensor = mi.load_dict(
+            {
+                "type": "perspective",
+                "fov": 39.3077,
+                "to_world": camera(0.0),
+                "film": {
+                    "type": "hdrfilm",
+                    "width": RES,
+                    "height": RES,
+                    "rfilter": {"type": "box"},
+                },
+                "sampler": {"type": "independent"},
+            }
+        )
+
         print("Rendering Reference Image:")
-        ref = mi.render(scene, spp=256)
-        mi.util.write_bitmap(f"{OUT}/ref.exr", ref)
+        ref = mi.render(scene, sensor=sensor, spp=256)
+        mi.util.write_bitmap(f"{OUT}/ref.exr", ref, write_async=False)
 
         integrator: RestirPTIntegrator = mi.load_dict(
             {
@@ -637,12 +667,19 @@ if __name__ == "__main__":
             }
         )
 
-        integrator.init(scene, spp=1)
+        integrator.init(scene, sensor, spp=1)
 
         render = dr.freeze(mi.render)
 
-        print("ReSTIR PT:")
-        for i in tqdm(range(200)):
-            img = render(scene, integrator=integrator, seed=i, spp=1)
+        for i in tqdm(range(FRAMES)):
+            integrator.prepare_frame(scene, sensor)
 
-            mi.util.write_bitmap(f"{OUT}/{i}.exr", img)
+            params = mi.traverse(sensor)
+            params["to_world"] = camera(i / FRAMES)
+            params.update()
+
+            img = render(
+                scene, sensor=sensor, integrator=integrator, seed=mi.UInt32(i), spp=1
+            )
+
+            mi.util.write_bitmap(f"{OUT}/{i}.exr", img, write_async=True)
