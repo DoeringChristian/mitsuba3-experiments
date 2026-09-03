@@ -682,4 +682,4 @@ if __name__ == "__main__":
                 scene, sensor=sensor, integrator=integrator, seed=mi.UInt32(i), spp=1
             )
 
-            mi.util.write_bitmap(f"{OUT}/{i}.exr", img, write_async=True)
+            mi.util.write_bitmap(f"{OUT}/{i}.exr", img, write_async=False)
