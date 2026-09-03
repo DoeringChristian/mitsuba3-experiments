@@ -10,9 +10,6 @@ name = "python"
 platforms = ["linux-64"]
 version = "0.1.0"
 
-[system-requirements]
-cuda = "12.4"
-
 [tasks]
 build-mitsuba = "cmake -S mitsuba3 -B mitsuba3/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build mitsuba3/build"
 
