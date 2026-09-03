@@ -1,0 +1,2 @@
+# rsync exclusions applied in both synchronization directions.
+ignore = ["ext/mitsuba3/build/"]

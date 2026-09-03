@@ -36,7 +36,7 @@ class RestirReservoir:
     w: mi.Float
     L: mi.Color3f
     W: mi.Float
-    M: mi.UInt
+    M: mi.Float
 
     def update(
         self,
@@ -110,10 +110,8 @@ class RestirPTEnhancedIntegrator(ADIntegrator):
         self.use_jacobian = props.get("jacobian", True)
         self.bsdf_sampling = props.get("bsdf_sampling", True)
         self.max_M_temporal = props.get("max_M_temporal", 20)
-        self.max_M_spatial = props.get("max_M_spatial", 20)
-        self.initial_search_radius = props.get("initial_search_radius", 10.0)
-        self.minimal_search_radius = props.get("minimal_search_radius", 3.0)
-        self.spatial_rounds = props.get("spatial_rounds", 9)
+        self.initial_search_radius = props.get("initial_search_radius", 30.0)
+        self.spatial_rounds = props.get("spatial_rounds", 3)
         self.max_jacobian = props.get("max_jacobian", 3.0)
         self.footprint_threshold = props.get("footprint_threshold", 0.02)
         self.gaussian_neighbors = props.get("gaussian_neighbors", False)
@@ -308,14 +306,8 @@ class RestirPTEnhancedIntegrator(ADIntegrator):
         )
         Z = mi.Float(reservoir.M)
 
-        max_iter = self.spatial_rounds
-        if self.max_M_spatial is not None and reservoir.M < self.max_M_spatial / 2:
-            max_iter = self.spatial_rounds
-
-        any_reused = mi.Bool(False)
-
         s = mi.UInt(0)
-        while dr.hint(s < max_iter, max_iterations=self.spatial_rounds):
+        while dr.hint(s < self.spatial_rounds, max_iterations=self.spatial_rounds):
             reuse = mi.Bool(True)
 
             if self.gaussian_neighbors:
@@ -383,8 +375,6 @@ class RestirPTEnhancedIntegrator(ADIntegrator):
                 mi.Bool(reuse),
             )
 
-            any_reused |= reuse
-
             s += 1
 
         phat = self.target(si, new_reservoir.z)
@@ -409,14 +399,6 @@ class RestirPTEnhancedIntegrator(ADIntegrator):
 
         new_reservoir.z.x_v = mi.Vector3f(new_sample.x_v)
         new_reservoir.z.n_v = mi.Vector3f(new_sample.n_v)
-
-        self.search_radius = dr.maximum(
-            dr.select(any_reused, self.search_radius, self.search_radius / 2),
-            self.minimal_search_radius,
-        )
-
-        if self.max_M_spatial is not None:
-            new_reservoir.M = dr.minimum(new_reservoir.M, self.max_M_spatial)
 
         return new_reservoir
 
@@ -706,9 +688,9 @@ if __name__ == "__main__":
                 "jacobian": True,
                 "bias_correction": False,
                 "bsdf_sampling": True,
-                "max_M_spatial": 20,
                 "max_M_temporal": 20,
-                "initial_search_radius": 10,
+                "initial_search_radius": 30,
+                "spatial_rounds": 3,
             }
         )
 
